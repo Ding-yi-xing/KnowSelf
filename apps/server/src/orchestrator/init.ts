@@ -19,7 +19,7 @@ import { createAbortRegistry } from "../lib/abort";
 import type { Runtime } from "../runtime";
 import { gracefulShutdown } from "./shutdown";
 import { startChatIndexSync } from "./chat-index-sync";
-import { createChatMessageCommitter } from "@knowself/chat-ingest";
+import { createChatMessageCommitter, createChatMessageRejecter } from "@knowself/chat-ingest";
 
 export interface BootResult {
   runtime: Runtime;
@@ -75,6 +75,9 @@ export async function bootRuntime(rootDir: string): Promise<BootResult> {
     // V3 / DESIGN-11 §7.2 #5：chat_message proposal 的落档提交器。
     // 不注入时 acceptProposal 的 chat_message 分支会抛 INVALID_TARGET_REF（不静默成功）。
     chatCommitter: createChatMessageCommitter(personStore),
+    // 批 1.5：与 committer 对称的拒绝器。不注入时 rejectProposal 的 chat_message 分支
+    // 会抛 INVALID_TARGET_REF（不静默成功）——只改 proposal 状态会让被拒内容被后续 accept 带落。
+    chatRejecter: createChatMessageRejecter(personStore),
   });
 
   // 6. Context router

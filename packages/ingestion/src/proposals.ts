@@ -19,6 +19,7 @@ import type {
   WriteRequest,
   ProfileSourceLink,
   ChatMessageCommitter,
+  ChatMessageRejecter,
 } from "@knowself/contracts";
 import type { ProfileStore } from "@knowself/profile-store";
 import { ProposalNotPendingError, InvalidTargetRefError, ProposalNotFoundError } from "./errors";
@@ -32,6 +33,12 @@ export interface ProposalDeps {
    * 缺省时 `chat_message` 决策抛 `INVALID_TARGET_REF`（**不静默成功**）。
    */
   chatCommitter?: ChatMessageCommitter;
+  /**
+   * 批 1.5：`chat_message` 拒绝器，与 `chatCommitter` 对称。
+   * 缺省时 `rejectProposal` 的 `chat_message` 分支抛 `INVALID_TARGET_REF`（**不静默成功**）——
+   * 因为「只改 proposal 状态」会让被拒内容在下次 accept 时被 `commitStaged` 一并落档。
+   */
+  chatRejecter?: ChatMessageRejecter;
 }
 
 /**
@@ -123,7 +130,11 @@ export function editProposal(
 }
 
 /**
- * 拒绝一条 proposal（仅改状态，不写 profile）。
+ * 拒绝一条 proposal。
+ *
+ * 普通 proposal：仅改状态，不写 profile。
+ * `chat_message` proposal（批 1.5）：**先跨批拒绝 staging，再改状态**。
+ * 顺序与 `acceptProposal` 对称——staging 是幂等的，profile 状态失败可重试。
  */
 export function rejectProposal(deps: ProposalDeps, proposalId: ProposalId): IngestionProposal {
   const now = deps.now ?? (() => new Date().toISOString());
@@ -131,6 +142,22 @@ export function rejectProposal(deps: ProposalDeps, proposalId: ProposalId): Inge
 
   if (proposal.status !== "pending") {
     throw new ProposalNotPendingError(proposalId, proposal.status);
+  }
+
+  // ── 批 1.5 加法式分支：chat_message 必须把拒绝落到 staging ──
+  // 否则 `commitStaged` 取该会话全部 staged 行时，被拒内容会被后续 accept 一并落档。
+  if (proposal.target.kind === "chat_message") {
+    const rejecter = requireChatRejecter(deps);
+    rejecter.reject({
+      proposal_id: proposal.id,
+      target: proposal.target,
+      now: now(),
+    });
+    return deps.store.transaction(() => {
+      deps.store.proposals.decide(proposalId, { decision: "reject" }, now());
+      refreshSourceStatusAfterDecision(deps.store, proposal.source_id, now());
+      return deps.store.proposals.get(proposalId);
+    });
   }
 
   return deps.store.transaction(() => {
@@ -182,6 +209,13 @@ function requireChatCommitter(deps: ProposalDeps): ChatMessageCommitter {
     throw new InvalidTargetRefError("chat_message committer 未注入（DESIGN-11 §7.3）");
   }
   return deps.chatCommitter;
+}
+
+function requireChatRejecter(deps: ProposalDeps): ChatMessageRejecter {
+  if (deps.chatRejecter === undefined) {
+    throw new InvalidTargetRefError("chat_message rejecter 未注入（批 1.5：拒绝必须落到 staging）");
+  }
+  return deps.chatRejecter;
 }
 
 function refreshSourceStatusAfterDecision(store: ProfileStore, sourceId: SourceId, now: string): void {

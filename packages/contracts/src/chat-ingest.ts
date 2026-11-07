@@ -48,3 +48,26 @@ export interface ChatMessageCommitter {
   /** 落档一个 chat_message proposal。必须幂等：重复调用返回 skipped>0，不抛错。 */
   commit(input: ChatMessageCommitInput): { committed: number; skipped: number };
 }
+
+/** `reject` 入参（批 1.5：与 `ChatMessageCommitter` 对称）。 */
+export interface ChatMessageRejectInput {
+  proposal_id: string;
+  target: ChatMessageCommitTarget;
+  /** ISO8601 带时区。 */
+  now: string;
+}
+
+/**
+ * 拒绝器接口 — 由 `packages/chat-ingest` 实现，经 `IngestionDeps.chatRejecter?` 注入。
+ *
+ * 为什么需要它：`rejectProposal` 原先只改 `ingestion_proposals` 状态、**零触碰 staging**，
+ * 而 `commitStaged` 取整会话 `status='staged'` 行 ⇒ 被拒内容照样落档。
+ * 与 `ChatMessageCommitter` 对称注入，避免新增依赖矩阵外的边。
+ *
+ * 契约（内容级不变量，不是行数核销）：调用成功后，
+ * `target.message_ids` 覆盖的消息在**全部批次**中不得再存在 `status='staged'` 行；
+ * 不满足必须抛错，**不得静默返回成功**。
+ */
+export interface ChatMessageRejecter {
+  reject(input: ChatMessageRejectInput): { rejected: number };
+}

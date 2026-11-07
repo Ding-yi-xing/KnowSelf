@@ -827,10 +827,14 @@ export {
 } from "./proposal";
 export {
   createChatMessageCommitter,
+  createChatMessageRejecter,
   type ChatCommitStoreLike,
+  type ChatRejectStoreLike,
   type ChatMessageCommitInputLike,
   type ChatMessageCommitTargetLike,
   type ChatMessageCommitterLike,
+  type ChatMessageRejectInputLike,
+  type ChatMessageRejecterLike,
   type ChatStagingRowLike,
 } from "./committer";
 export {

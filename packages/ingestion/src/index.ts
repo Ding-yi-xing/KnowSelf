@@ -13,6 +13,7 @@ import type {
   IngestRequest,
   IngestResponse,
   ChatMessageCommitter,
+  ChatMessageRejecter,
 } from "@knowself/contracts";
 import type { ProfileStore } from "@knowself/profile-store";
 import type { ProviderAdapter } from "@knowself/provider-adapter";
@@ -43,6 +44,12 @@ export interface IngestionDeps {
    * 缺省时 `acceptProposal` 的 `chat_message` 分支抛 `INVALID_TARGET_REF`。
    */
   chatCommitter?: ChatMessageCommitter;
+  /**
+   * 批 1.5：`chat_message` proposal 的拒绝器，与 `chatCommitter` 对称。
+   * 由 `apps/server` 装配时注入（`createChatMessageRejecter(personStore)`）；
+   * 缺省时 `rejectProposal` 的 `chat_message` 分支抛 `INVALID_TARGET_REF`（不静默成功）。
+   */
+  chatRejecter?: ChatMessageRejecter;
 }
 
 export interface Ingestion {
@@ -93,6 +100,7 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
     store: deps.store,
     now,
     ...(deps.chatCommitter !== undefined ? { chatCommitter: deps.chatCommitter } : {}),
+    ...(deps.chatRejecter !== undefined ? { chatRejecter: deps.chatRejecter } : {}),
   };
 
   return {

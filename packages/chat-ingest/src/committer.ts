@@ -134,3 +134,81 @@ export function createChatMessageCommitter(
     },
   };
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+//  批 1.5：与 committer 对称的 rejecter
+//
+//  为什么必须对称：原先 `rejectProposal` 只改 `ingestion_proposals` 状态、零触碰
+//  staging，而 `commitStaged` 取该会话全部 `staged` 行 ⇒ 被拒内容照样落档。
+//  跨批次按 `message_ids` 精确拒绝，杜绝「拒绝的有效期只有一个导入周期」。
+// ──────────────────────────────────────────────────────────────────────────
+
+/** 拒绝器所需的最小 store 能力面（`PersonStore.staging` 满足）。 */
+export interface ChatRejectStoreLike {
+  staging: {
+    rejectStagedCrossBatch(q: {
+      conversation_id: string;
+      proposal_id: string;
+      message_ids: readonly string[];
+      now: string;
+    }): { rejected: number; remaining_staged: number };
+  };
+}
+
+/** 与 contracts `ChatMessageRejectInput` 结构等价。 */
+export interface ChatMessageRejectInputLike {
+  proposal_id: string;
+  target: ChatMessageCommitTargetLike;
+  now: string;
+}
+
+/** 与 contracts `ChatMessageRejecter` 结构等价。 */
+export interface ChatMessageRejecterLike {
+  reject(input: ChatMessageRejectInputLike): { rejected: number };
+}
+
+/**
+ * 创建聊天消息拒绝器。
+ *
+ * `reject()` 的行为：
+ *   1. 校验 target（`chat_message` / 1..2000 条，复用 `assertTarget`）；
+ *   2. 调 `staging.rejectStagedCrossBatch` —— 跨批次按 `message_ids` 置 rejected，
+ *      SQL 自带三道安全阀（`status='staged'` / 仅 succeeded 批次 / `proposal_id` 落审计）；
+ *   3. **内容级不变量核销**：`remaining_staged > 0` 即抛错，绝不静默返回成功。
+ *
+ * 幂等：重复调用时 `rejected=0`、`remaining_staged=0`，正常返回（与 `commit` 对称）。
+ */
+export function createChatMessageRejecter(
+  store: ChatRejectStoreLike,
+): ChatMessageRejecterLike {
+  return {
+    reject(input: ChatMessageRejectInputLike): { rejected: number } {
+      const { target } = input;
+      assertTarget(target);
+
+      let result: { rejected: number; remaining_staged: number };
+      try {
+        result = store.staging.rejectStagedCrossBatch({
+          conversation_id: target.conversation_id,
+          proposal_id: input.proposal_id,
+          message_ids: target.message_ids,
+          now: input.now,
+        });
+      } catch (cause) {
+        if (cause instanceof ChatIngestError) throw cause;
+        throw new ChatIngestError("INVALID_TARGET_REF", "聊天消息跨批拒绝失败", { cause });
+      }
+
+      // 核销判据不是「有几行被改了」，而是「这些内容还能不能被落档」。
+      if (result.remaining_staged > 0) {
+        throw new ChatIngestError(
+          "INVALID_TARGET_REF",
+          `拒绝后仍有 ${result.remaining_staged} 条相同消息处于 staged（可能属于 running 批次），` +
+            "无法保证不会再次落档；请把本次拒绝视为未生效",
+        );
+      }
+
+      return { rejected: result.rejected };
+    },
+  };
+}

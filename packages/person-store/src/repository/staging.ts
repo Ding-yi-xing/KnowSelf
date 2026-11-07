@@ -45,6 +45,25 @@ export interface StagingRepo extends BatchesRepo, CursorsRepo, StagingReconcileR
     proposal_id: string;
     now: string;
   }): { rejected: number };
+  /**
+   * 批 1.5 加法式：**跨批次按 `message_ids` 精确拒绝**。
+   *
+   * 背景：`chat_message_staging` 的 PK 是 `(batch_id, conversation_id, message_id)`，
+   * 同一消息在不同批次是**不同行**；月度重导 90% 重叠时，只拒当期批次会让被拒内容
+   * 从更新批次再次落档（「拒绝的有效期只有一个导入周期」）。
+   *
+   * 安全阀三道：
+   *   ① `status='staged'` —— 已 committed 的行碰不到，落档单向性不破；
+   *   ② `batch_id IN (... status='succeeded')` —— 不改到 running 批次（CLI 与 server 并存竞态）；
+   *   ③ 返回 `remaining_staged` —— 供调用方做**内容级不变量**核销（「这 N 条在全部批次中
+   *      不得再有 staged 行」），而不只是「有几行被改了」。
+   */
+  rejectStagedCrossBatch(q: {
+    conversation_id: string;
+    proposal_id: string;
+    message_ids: readonly string[];
+    now: string;
+  }): { rejected: number; remaining_staged: number };
   /** 加法式（DESIGN-13 §4.4 步骤 3 需**批次级**拒绝；§3.7 的 `rejectStaged` 是会话级）。 */
   rejectBatch(q: { batch_id: string; now: string }): { rejected: number };
 }
@@ -56,7 +75,8 @@ const STAGING_INSERT = `INSERT OR IGNORE INTO chat_message_staging
 
 function stagingRowOps(db: PersonDb): Pick<
   StagingRepo,
-  "stageMessages" | "markTier" | "listStaged" | "countByStatus" | "commitStaged" | "rejectStaged" | "rejectBatch"
+  | "stageMessages" | "markTier" | "listStaged" | "countByStatus" | "commitStaged"
+  | "rejectStaged" | "rejectStagedCrossBatch" | "rejectBatch"
 > {
   const stageMessages = (
     q: Parameters<StagingRepo["stageMessages"]>[0],
@@ -166,6 +186,35 @@ function stagingRowOps(db: PersonDb): Pick<
     return { rejected: result.changes };
   };
 
+  const rejectStagedCrossBatch = (
+    q: Parameters<StagingRepo["rejectStagedCrossBatch"]>[0],
+  ): { rejected: number; remaining_staged: number } => {
+    const ids = [...new Set(q.message_ids)];
+    if (ids.length === 0) return { rejected: 0, remaining_staged: 0 };
+
+    const placeholders = ids.map(() => "?").join(", ");
+    const result = db
+      .prepare(
+        `UPDATE chat_message_staging
+            SET status = 'rejected', proposal_id = ?
+          WHERE conversation_id = ?
+            AND message_id IN (${placeholders})
+            AND status = 'staged'
+            AND batch_id IN (SELECT batch_id FROM ingest_batches WHERE status = 'succeeded')`,
+      )
+      .run(q.proposal_id, q.conversation_id, ...ids);
+
+    // 内容级不变量：不限批次检查是否仍有可落档行（含 running 批次，保守失败）。
+    const remaining = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM chat_message_staging
+          WHERE conversation_id = ? AND message_id IN (${placeholders}) AND status = 'staged'`,
+      )
+      .get(q.conversation_id, ...ids) as { n: number };
+
+    return { rejected: result.changes, remaining_staged: remaining.n };
+  };
+
   const rejectBatch = (q: { batch_id: string; now: string }): { rejected: number } => {
     const result = db
       .prepare(
@@ -176,7 +225,16 @@ function stagingRowOps(db: PersonDb): Pick<
     return { rejected: result.changes };
   };
 
-  return { stageMessages, markTier, listStaged, countByStatus, commitStaged, rejectStaged, rejectBatch };
+  return {
+    stageMessages,
+    markTier,
+    listStaged,
+    countByStatus,
+    commitStaged,
+    rejectStaged,
+    rejectStagedCrossBatch,
+    rejectBatch,
+  };
 }
 
 export function createStagingRepo(db: PersonDb): StagingRepo {

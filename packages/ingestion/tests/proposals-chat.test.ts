@@ -3,6 +3,8 @@ import { createProfileStore, type ProfileStore } from "@knowself/profile-store";
 import type {
   ChatMessageCommitter,
   ChatMessageCommitInput,
+  ChatMessageRejecter,
+  ChatMessageRejectInput,
   IngestionProposal,
   ProposalStatus,
 } from "@knowself/contracts";
@@ -117,6 +119,18 @@ function spyCommitter(): ChatMessageCommitter & { calls: ChatMessageCommitInput[
   };
 }
 
+/** 批 1.5：与 spyCommitter 对称的拒绝器 spy。 */
+function spyRejecter(): ChatMessageRejecter & { calls: ChatMessageRejectInput[] } {
+  const calls: ChatMessageRejectInput[] = [];
+  return {
+    calls,
+    reject(input: ChatMessageRejectInput) {
+      calls.push(input);
+      return { rejected: input.target.message_ids.length };
+    },
+  };
+}
+
 describe("acceptProposal — chat_message 分支（DESIGN-11 §7.2 #4 / §7.4）", () => {
   it("未注入 chatCommitter → 明确抛 INVALID_TARGET_REF（不静默成功）", () => {
     const store = mockStore();
@@ -189,12 +203,30 @@ describe("editProposal / rejectProposal — chat_message 分支", () => {
     expect(committer.calls).toHaveLength(1);
   });
 
-  it("reject：不调提交器、不落档", () => {
+  it("reject：调拒绝器、不调提交器、不落档（批 1.5）", () => {
     const store = mockStore();
     const committer = spyCommitter();
-    const result = rejectProposal({ store, now: () => NOW, chatCommitter: committer }, PROPOSAL_ID);
+    const rejecter = spyRejecter();
+    const result = rejectProposal(
+      { store, now: () => NOW, chatCommitter: committer, chatRejecter: rejecter },
+      PROPOSAL_ID,
+    );
     expect(result.status).toBe("rejected");
     expect(committer.calls).toHaveLength(0);
+    expect(rejecter.calls).toHaveLength(1);
+    expect(rejecter.calls[0]?.target.message_ids).toEqual(chatProposal().target.message_ids);
+  });
+
+  it("未注入 chatRejecter → 明确抛 INVALID_TARGET_REF（不静默成功）", () => {
+    const store = mockStore();
+    const committer = spyCommitter();
+    // 只注入 committer 不算完成装配：拒绝仍会「只改 proposal 状态」，
+    // 被拒内容会在后续 accept 时被 commitStaged 一并落档。
+    expect(() =>
+      rejectProposal({ store, now: () => NOW, chatCommitter: committer }, PROPOSAL_ID),
+    ).toThrow(InvalidTargetRefError);
+    expect(committer.calls).toHaveLength(0);
+    expect(store.current.status).toBe("pending"); // 状态未被误改
   });
 });
 

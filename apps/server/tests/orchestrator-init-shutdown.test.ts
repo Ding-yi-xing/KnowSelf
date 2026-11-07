@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createIngestion } from "@knowself/ingestion";
 
 vi.mock("@knowself/config", () => ({
   loadSettings: vi.fn(() => defaultSettings()),
@@ -178,6 +179,18 @@ describe("bootRuntime", () => {
   it("bootRuntime 返回的 runtime.settings 包含 providers", async () => {
     const { settings } = await bootRuntime(tmpDir);
     expect(settings.providers).toHaveLength(1);
+  });
+
+  it("装配层同时注入 chatCommitter 与 chatRejecter（批 1.5）", async () => {
+    // 上一轮真实踩过的坑：chatCommitter 实现了但 init.ts 没注入，生产必抛
+    // INVALID_TARGET_REF。这里断言的是 createIngestion 的**入参**（Ingestion 接口
+    // 本身没有这些字段），能在装配层直接拦住同类遗漏。
+    await bootRuntime(tmpDir);
+
+    expect(createIngestion).toHaveBeenCalled();
+    const deps = vi.mocked(createIngestion).mock.calls.at(-1)?.[0];
+    expect(typeof deps?.chatCommitter?.commit).toBe("function");
+    expect(typeof deps?.chatRejecter?.reject).toBe("function");
   });
 });
 
