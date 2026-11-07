@@ -434,6 +434,11 @@ interface JudgedConversation {
   verdict: TierVerdict;
   /** `chat_conversations` 是否已存在该会话（Tier 硬门槛 3 的输入）。 */
   existed: boolean;
+  /**
+   * 批 2 / 1B′：装配层算一次的信任判定，供 `judge` 与 `enforceHardGates` **共用**。
+   * 同值两处喂入，避免 staging 的 `reason_codes` 与 proposal 的 verdict 审计分裂。
+   */
+  trusted_ingest: boolean;
   /** 去重后的 `content_type` 取值（Tier 硬门槛 2 的输入）。 */
   content_types: readonly string[];
   /** staging 已存在的消息数（L2 幂等口径的 `skipped`）。 */
@@ -494,6 +499,10 @@ function stageAndJudge(
   }
 
   const existing = store.conversations.get(conversation_id);
+  // 批 2 / 1B′：唯一的信任判定来源。`会话已有历史 ∨ auto_ok 预授权`。
+  // 本机 `data/chat-ingest/` 不存在（auto_ok.txt 缺失），只认白名单会让 1B′ 永远不生效；
+  // 接上 `exists` 后用户路径是「首次导入 → 接受一次 → 之后全自动」，无需编辑配置文件。
+  const trusted_ingest = existing !== null || deps.auto_ok.includes(conversation_id);
   const speakers = new Set(
     conversation.messages.filter((message) => message.role !== "system").map((m) => m.sender_id),
   );
@@ -520,6 +529,7 @@ function stageAndJudge(
       kind: conversation.kind,
       exists: existing !== null,
       member_count,
+      trusted_ingest,
     },
     cursor: new CursorStore(store.staging).read(conversation.platform, conversation_id),
     known_sender_ids: knownSenders,
@@ -562,6 +572,7 @@ function stageAndJudge(
     platform: conversation.platform,
     verdict,
     existed: existing !== null,
+    trusted_ingest,
     content_types: contentTypes,
     pre_existing,
     inserted,
@@ -691,6 +702,7 @@ async function runPipelineMode(
       gates: {
         conversation_id: item.conversation_id,
         conversation_exists: item.existed,
+        trusted_ingest: item.trusted_ingest,
         auto_ok_conversation_ids: deps.auto_ok,
         batch_quality_failed,
       },

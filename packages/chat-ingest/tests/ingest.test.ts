@@ -214,6 +214,44 @@ describe("ingestExport — pipeline 模式（DESIGN-11 §6.3 / §5.2 / §6.5）"
     expect(store.messages.count({ conversation_id: SINGLE_CONV })).toBe(5);
   });
 
+  it("批 2 / 1B′ 两态①：会话不存在且无预授权 → ID_FALLBACK 保留（保守）", async () => {
+    const sink = memorySink(createChatMessageCommitter(store));
+    const result = await ingestExport({
+      store,
+      dir: defaultExportDir(),
+      now: NOW,
+      source_id: SOURCE_ID,
+      proposalSink: sink,
+      chatCommitter: createChatMessageCommitter(store),
+      only: ["测试群"],
+    });
+
+    expect(result.tier).toEqual({ auto: 0, review: 1 });
+    expect(sink.created[0]?.target.reason_codes).toContain("ID_FALLBACK");
+  });
+
+  it("批 2 / 1B′ 两态②：auto_ok 命中 + 结构合法的 sha1 派生 ID → 自动落档", async () => {
+    // 直接锁住本轮修复：本机 `data/chat-ingest/` 不存在，auto_ok 文件缺失时
+    // 用户路径应是「首次导入 → 接受一次 → 之后自动」，不需要编辑任何配置文件。
+    seedAlias();
+    const sink = memorySink(createChatMessageCommitter(store));
+    const result = await ingestExport({
+      store,
+      dir: defaultExportDir(),
+      now: NOW,
+      source_id: SOURCE_ID,
+      proposalSink: sink,
+      chatCommitter: createChatMessageCommitter(store),
+      tierConfig: { auto_ok: [SINGLE_CONV] },
+      only: ["张三"],
+    });
+
+    expect(result.tier).toEqual({ auto: 1, review: 0 });
+    expect(result.committed).toBeGreaterThan(0);
+    expect(sink.created[0]?.target.reason_codes).not.toContain("ID_FALLBACK");
+    expect(sink.created[0]?.reasoning).toContain("rule_version=chat-tier-v2");
+  });
+
   it("Tier B 进队列、不落档；staging 保留载荷与 reason_codes", async () => {
     const sink = memorySink(createChatMessageCommitter(store));
     const result = await ingestExport({
@@ -223,7 +261,8 @@ describe("ingestExport — pipeline 模式（DESIGN-11 §6.3 / §5.2 / §6.5）"
       source_id: SOURCE_ID,
       proposalSink: sink,
       chatCommitter: createChatMessageCommitter(store),
-      // 会话白名单只解决 NEW_CONVERSATION；sha1 兜底 ID / 未解析发送者仍应命中
+      // 批 2 / 1B′：auto_ok 命中 ⇒ trusted_ingest=true ⇒ 结构合法的 sha1 派生 ID 被豁免；
+      // 未解析发送者 / 成员表未知仍命中，因此整体仍是 Tier B。
       tierConfig: { auto_ok: [GROUP_CONV] },
       only: ["测试群"],
     });
@@ -239,10 +278,10 @@ describe("ingestExport — pipeline 模式（DESIGN-11 §6.3 / §5.2 / §6.5）"
     const proposal = sink.created[0];
     expect(proposal?.target.tier).toBe("review");
     expect(proposal?.target.message_ids).toHaveLength(8);
-    expect(proposal?.target.reason_codes).toContain("ID_FALLBACK");
+    expect(proposal?.target.reason_codes).not.toContain("ID_FALLBACK");
     expect(proposal?.target.reason_codes).toContain("SENDER_UNRESOLVED");
     expect(proposal?.target.reason_codes).toContain("GROUP_MEMBER_UNKNOWN");
-    expect(proposal?.reasoning).toContain("rule_version=chat-tier-v1");
+    expect(proposal?.reasoning).toContain("rule_version=chat-tier-v2");
 
     const staged = store.staging.listStaged({ batch_id: result.batch_id, conversation_id: GROUP_CONV });
     expect(staged).toHaveLength(8);

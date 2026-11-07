@@ -38,10 +38,51 @@ function baseInput(): TierJudgeInput {
   };
 }
 
+/** 批 2 / 1B′：规则 6 的三条件豁免（在规则层判定，不在 gates 撤销）。 */
+describe("规则 6 ID_FALLBACK 有条件豁免（chat-tier-v2）", () => {
+  const HEX40 = "a".repeat(40);
+  const validId = `${CONV}:sha1:${HEX40}`;
+
+  function verdictFor(messageId: string, trusted: boolean | undefined) {
+    const conversation = { ...baseInput().conversation, ...(trusted === undefined ? {} : { trusted_ingest: trusted }) };
+    return judgeTier({
+      ...baseInput(),
+      conversation,
+      messages: [message({ message_id: messageId })],
+      now_ms: NOW_MS,
+    }).reason_codes;
+  }
+
+  it("不可信（缺省 / false）→ 派生 ID 仍命中", () => {
+    expect(verdictFor(validId, undefined)).toContain("ID_FALLBACK");
+    expect(verdictFor(validId, false)).toContain("ID_FALLBACK");
+  });
+
+  it("可信 + 本会话前缀 + 40 位小写 hex → 豁免", () => {
+    expect(verdictFor(validId, true)).not.toContain("ID_FALLBACK");
+    expect(verdictFor(validId, true)).toEqual([]);
+  });
+
+  it("可信但 ID 属于别的会话 → 仍命中", () => {
+    expect(verdictFor(`wechat:other:sha1:${HEX40}`, true)).toContain("ID_FALLBACK");
+  });
+
+  it("可信但 digest 非法（截断 / 大写 / 拼接）→ 仍命中", () => {
+    expect(verdictFor(`${CONV}:sha1:abc`, true)).toContain("ID_FALLBACK");
+    expect(verdictFor(`${CONV}:sha1:${"A".repeat(40)}`, true)).toContain("ID_FALLBACK");
+    expect(verdictFor(`${CONV}:sha1:${HEX40}suffix`, true)).toContain("ID_FALLBACK");
+  });
+
+  it("非派生 ID → 无论可信与否都不命中", () => {
+    expect(verdictFor(`${CONV}:1`, true)).toEqual([]);
+    expect(verdictFor(`${CONV}:1`, false)).toEqual([]);
+  });
+});
+
 /** §6.2 表格 11 行逐行一个用例（reason_code → 可执行判据）。 */
 describe("TierJudge — 11 个 reason_code（DESIGN-11 §6.2）", () => {
   it("规则表与 §6.2 的码集合、顺序、版本号一致", () => {
-    expect(TIER_RULE_VERSION).toBe("chat-tier-v1");
+    expect(TIER_RULE_VERSION).toBe("chat-tier-v2");
     expect(TIER_RULES.map((rule) => rule.code)).toEqual([...TIER_REASON_CODES]);
     expect(TIER_REASON_CODES).toHaveLength(11);
   });

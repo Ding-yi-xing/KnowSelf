@@ -4,7 +4,7 @@
  * 粒度：**一个 proposal = (batch_id, conversation_id, 分片)**，不是一条消息一个 proposal。
  * 分片：同一会话消息按 `(ts_ms, message_id)` 升序切成 ≤ 2000 条/片（§6.4，contracts 硬约束）。
  * 审计字段（§6.3 表）：`proposed_body` = 人类可读摘要（≤8000，**不是**原文全文）、
- * `reasoning` = `tier=auto; rule_version=chat-tier-v1; reason_codes=[...]`、
+ * `reasoning` = `tier=auto; rule_version=chat-tier-v2; reason_codes=[...]`、
  * `produced_by_provider` = `chat-ingest:rule-v1`、`source_excerpts` = `[]`（原文在 staging）。
  *
  * 与 `contracts` / `person-store` 均无 import：产出对象与 `IngestionProposal` 结构等价，

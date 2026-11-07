@@ -11,7 +11,7 @@
  */
 
 /** 规则版本（§6.2 末段）；升级判定逻辑时必须同步 +1 版本号。 */
-export const TIER_RULE_VERSION = "chat-tier-v1";
+export const TIER_RULE_VERSION = "chat-tier-v2";
 
 /** `ts_ms` 下界：2011-01-01（§6.2 规则 2）。 */
 const MIN_TS_MS = 1_293_840_000_000;
@@ -90,6 +90,16 @@ export interface TierConversationLike {
   exists: boolean;
   /** 已知成员数；`<= 0` 表示工具未导出成员表（规则 9）。 */
   member_count: number;
+  /**
+   * 批 2 / 1B′：会话是否可信到「允许 sha1 派生 ID 走自动分层」。
+   *
+   * 由**装配层算一次**（`会话已存在 ∨ auto_ok 命中`，且不在强制复核集合中），
+   * 同时喂给 `judge` / `judgeNow` 与 `enforceHardGates`，保证 staging 与 proposal
+   * 看到的是同一个判定（否则审计分裂）。
+   *
+   * 缺省 `undefined` = 不可信（保守）：旧调用方不传时规则 6 行为不变。
+   */
+  trusted_ingest?: boolean;
 }
 
 export interface TierCursorLike {
@@ -145,6 +155,11 @@ export interface TierJudgeInput {
 export interface TierGateInput {
   conversation_id: string;
   conversation_exists: boolean;
+  /**
+   * 批 2：与 `TierConversationLike.trusted_ingest` **同一个值**，由装配层算一次传入，
+   * 避免 judge 与 gates 各自判定导致 audit 分裂。缺省时回退到旧逻辑（向后兼容）。
+   */
+  trusted_ingest?: boolean;
   /** `data/chat-ingest/auto_ok.txt` 内容（每行一个 `conversation_id`）。 */
   auto_ok_conversation_ids: readonly string[];
   /** 批次级：本批次**任一**会话触发了 `BATCH_QUALITY`。 */
@@ -222,9 +237,31 @@ function hitContentTypeUnknown(input: TierRuleInput): boolean {
   });
 }
 
-/** 规则 6：使用了 `sha1(...)` 兜底 ID（`<platform>:<conv>:sha1:<digest>`）。 */
+/**
+ * 规则 6：使用了 `sha1(...)` 兜底 ID（`<conversation_id>:sha1:<40hex>`）。
+ *
+ * 批 2 / 1B′ 有条件豁免：会话可信（已有历史、可被规则 7 `ID_CONFLICT` 与游标交叉校验，
+ * 或运维显式预授权）**且** ID 结构合法时，派生 ID 不再触发 review。
+ *
+ * 三个条件各防一件事：
+ *   - `startsWith(conversation_id + ":sha1:")` → ID 属于本会话、且走的是兜底方案；
+ *   - `/^[0-9a-f]{40}$/` → 排除截断/拼接坏 ID；
+ *   - `trusted_ingest` → 会话有历史可交叉校验（或显式预授权）。
+ *
+ * 「派生输入不可伪造」（`ts_ms + sender_name + content + ordinal`）不在本层验证：
+ * `TierMessageLike` 拿不到 `sender_name` / `ordinal`，改由 reader 侧的**金色向量测试**
+ * 钉死公式，防止 `lines.ts` 与 `json.ts` 两份拷贝漂移。
+ */
 function hitIdFallback(input: TierRuleInput): boolean {
-  return input.messages.some((message) => message.message_id.includes(":sha1:"));
+  if (input.conversation.trusted_ingest !== true) {
+    return input.messages.some((message) => message.message_id.includes(":sha1:"));
+  }
+  const prefix = `${input.conversation.conversation_id}:sha1:`;
+  return input.messages.some((message) => {
+    if (!message.message_id.includes(":sha1:")) return false;
+    if (!message.message_id.startsWith(prefix)) return true;
+    return !/^[0-9a-f]{40}$/.test(message.message_id.slice(prefix.length));
+  });
 }
 
 /** 规则 7：同 `message_id` 已存在，但 `content` 或 `ts_ms` 不同。 */
@@ -329,7 +366,8 @@ export class TierJudge {
     // 不得豁免其余 10 个码。
     const { gates } = input;
     const conversationTrusted =
-      gates.conversation_exists || gates.auto_ok_conversation_ids.includes(gates.conversation_id);
+      gates.trusted_ingest ??
+      (gates.conversation_exists || gates.auto_ok_conversation_ids.includes(gates.conversation_id));
     if (conversationTrusted) {
       hits.delete("NEW_CONVERSATION");
     } else {

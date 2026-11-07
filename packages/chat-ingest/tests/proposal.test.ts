@@ -78,10 +78,10 @@ describe("ProposalBuilder — §6.4 分片 / §6.3 审计字段", () => {
 
   it("reasoning 逐字为 tier/rule_version/reason_codes", () => {
     expect(buildReasoning("auto", [])).toBe(
-      "tier=auto; rule_version=chat-tier-v1; reason_codes=[]",
+      "tier=auto; rule_version=chat-tier-v2; reason_codes=[]",
     );
     expect(buildReasoning("review", ["ID_FALLBACK", "MANUAL_FLAG"])).toBe(
-      "tier=review; rule_version=chat-tier-v1; reason_codes=[ID_FALLBACK,MANUAL_FLAG]",
+      "tier=review; rule_version=chat-tier-v2; reason_codes=[ID_FALLBACK,MANUAL_FLAG]",
     );
   });
 
