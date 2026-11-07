@@ -1,0 +1,148 @@
+/**
+ * `persons` 仓库（DESIGN-13 §3.1 接口定稿，签名逐字；本文件承载读族与组合）。
+ * 纪律：只做 SQL 与行映射；业务判断（归并裁决 / 落档顺序）在 `src/*.ts`。
+ * 写族见 `person-writes.ts`、归并审计见 `person-merges.ts`（§2.2 行预算拆分，接口不变）。
+ */
+import type { PersonDb } from "../db";
+import { SELF_PERSON_ID } from "../ddl/migrations";
+import { PersonNotFoundError } from "../errors";
+import type {
+  AutoWriteResult,
+  MergeListQuery,
+  PersonInsert,
+  PersonListQuery,
+  PersonMergeInsert,
+  PersonMergeRow,
+  PersonPatch,
+  PersonRow,
+  PersonStatsPatch,
+  PersonStatus,
+  SubjectKind,
+} from "../types";
+import { createPersonMergesRepo } from "./person-merges";
+import { createPersonWritesRepo } from "./person-writes";
+
+type PersonSqlRow = Omit<PersonRow, "manual_locked"> & { manual_locked: number };
+
+export interface PersonsRepo {
+  // ── 读 ──
+  get(personId: string): PersonRow | null;
+  getOrThrow(personId: string): PersonRow;
+  getSelf(): PersonRow;
+  list(q?: PersonListQuery): PersonRow[];
+  count(q?: { subject_kind?: SubjectKind; status?: PersonStatus }): number;
+  listMerged(intoPersonId: string): PersonRow[];
+
+  // ── 写 ──
+  insert(row: PersonInsert, now: string): PersonRow;
+  updateManual(personId: string, patch: PersonPatch, now: string): PersonRow;
+  updateAutoStats(personId: string, stats: PersonStatsPatch, now: string): AutoWriteResult;
+  updateProfileJson(
+    personId: string,
+    profileJson: string,
+    producedBy: string,
+    now: string,
+  ): AutoWriteResult;
+  setManualLocked(personId: string, locked: boolean, now: string): void;
+
+  // ── 归并审计（person_merges）──
+  insertMerge(row: PersonMergeInsert): PersonMergeRow;
+  getMerge(mergeId: string): PersonMergeRow | null;
+  listMerges(q?: MergeListQuery): PersonMergeRow[];
+  markMergeUndone(mergeId: string, evidencePatch: string, now: string): void;
+  markMerged(fromId: string, intoId: string, now: string): void;
+  unmarkMerged(personId: string, now: string): void;
+
+  // ── 重建 ──
+  recomputeStats(personId: string, now: string): PersonRow;
+}
+
+function mapPerson(row: PersonSqlRow): PersonRow {
+  return { ...row, manual_locked: row.manual_locked === 1 };
+}
+
+function personFilter(q: { subject_kind?: SubjectKind; status?: PersonStatus; keyword?: string }): {
+  where: string;
+  params: (string | number)[];
+} {
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+  if (q.subject_kind !== undefined) {
+    conditions.push("subject_kind = ?");
+    params.push(q.subject_kind);
+  }
+  if (q.status !== undefined) {
+    conditions.push("status = ?");
+    params.push(q.status);
+  }
+  if (q.keyword !== undefined) {
+    conditions.push("(display_name LIKE ? OR remark LIKE ?)");
+    params.push(`%${q.keyword}%`, `%${q.keyword}%`);
+  }
+  return { where: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "", params };
+}
+
+function pageClause(
+  limit: number | undefined,
+  offset: number | undefined,
+): { sql: string; params: number[] } {
+  return limit === undefined
+    ? { sql: "", params: [] }
+    : { sql: " LIMIT ? OFFSET ?", params: [limit, offset ?? 0] };
+}
+
+export function createPersonsRepo(db: PersonDb): PersonsRepo {
+  const get = (personId: string): PersonRow | null => {
+    const row = db.prepare("SELECT * FROM persons WHERE person_id = ?").get(personId) as
+      | PersonSqlRow
+      | undefined;
+    return row ? mapPerson(row) : null;
+  };
+
+  const getOrThrow = (personId: string): PersonRow => {
+    const row = get(personId);
+    if (!row) throw new PersonNotFoundError(`人物不存在: ${personId}`, personId);
+    return row;
+  };
+
+  const list = (q: PersonListQuery = {}): PersonRow[] => {
+    const filter = personFilter(q);
+    const page = pageClause(q.limit, q.offset);
+    const rows = db
+      .prepare(
+        `SELECT * FROM persons ${filter.where} ORDER BY last_msg_at DESC, person_id ASC${page.sql}`,
+      )
+      .all(...filter.params, ...page.params) as PersonSqlRow[];
+    return rows.map(mapPerson);
+  };
+
+  const count = (q: { subject_kind?: SubjectKind; status?: PersonStatus } = {}): number => {
+    const filter = personFilter(q);
+    const row = db
+      .prepare(`SELECT COUNT(*) AS n FROM persons ${filter.where}`)
+      .get(...filter.params) as { n: number };
+    return row.n;
+  };
+
+  const listMerged = (intoPersonId: string): PersonRow[] =>
+    (
+      db
+        .prepare(
+          "SELECT * FROM persons WHERE status = 'merged' AND merged_into = ? ORDER BY person_id ASC",
+        )
+        .all(intoPersonId) as PersonSqlRow[]
+    ).map(mapPerson);
+
+  const writes = createPersonWritesRepo(db, getOrThrow);
+  const merges = createPersonMergesRepo(db);
+
+  /** 空库兜底（DESIGN-13 §3.1 / §7.5）：'me' 缺失则补建，已存在则原样返回。 */
+  const getSelf = (): PersonRow =>
+    get(SELF_PERSON_ID) ??
+    writes.insert(
+      { person_id: SELF_PERSON_ID, subject_kind: "self", display_name: "我" },
+      new Date().toISOString(),
+    );
+
+  return { get, getOrThrow, getSelf, list, count, listMerged, ...writes, ...merges };
+}

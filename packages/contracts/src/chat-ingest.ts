@@ -1,0 +1,50 @@
+/**
+ * chat-ingest.ts — 聊天消息落档提交器契约（DESIGN-11 §7.3）
+ *
+ * 定位：**纯 TS 接口，非 Zod**（DESIGN-17 §2.1 C-1 明示）。
+ *
+ * 为什么放 contracts：若让 `ingestion` 直接调 `person-store`，会新增一条
+ * 依赖矩阵（ARCHITECTURE §5）外的边。解法 = 接口放 contracts，实现在
+ * chat-ingest，由 apps/server 依赖注入接线（DESIGN-11 §7.3）。
+ *
+ * 工作单元：chat-ingest（实现） / ingestion（消费） / chat-engine（装配）
+ *
+ * 弱模型实施提示：
+ *   1. `commit` 必须幂等：重复调用返回 `skipped > 0`，**不抛错**。
+ *   2. 实现方只写 persons.sqlite；**不**调 `buildLink` / `links.insert` /
+ *      `proposalToWriteRequest`（profile 写入链路与本接口无关，DESIGN-11 §7.4）。
+ *   3. 审计信息塞进 proposal 既有字段（`reasoning` / `produced_by_provider`），
+ *      不给 `IngestionProposal` 加字段。
+ */
+
+/** 落档目标 — 载荷在 `chat_message_staging`，本 target 只存引用与分层信息。 */
+export interface ChatMessageCommitTarget {
+  kind: "chat_message";
+  /** 批次 ID（UUID v4）。 */
+  batch_id: string;
+  conversation_id: string;
+  /** 本 proposal 覆盖的消息（≤2000 条，按 ts_ms 升序）。 */
+  message_ids: readonly string[];
+  /** 置信分层（供 UI 筛选与审计）。 */
+  tier: "auto" | "review";
+  /** Tier B 命中的规则码；Tier A 为空数组。 */
+  reason_codes: readonly string[];
+}
+
+/** `commit` 入参（DESIGN-11 §7.3 逐字抄录，仅拆出命名类型）。 */
+export interface ChatMessageCommitInput {
+  proposal_id: string;
+  source_id: string;
+  target: ChatMessageCommitTarget;
+  /** ISO8601 带时区。 */
+  now: string;
+}
+
+/**
+ * 提交器接口 — 由 `packages/chat-ingest` 实现，经 `IngestionDeps.chatCommitter?`
+ * 注入（加法式可选字段，DESIGN-11 §7.2 #5）。
+ */
+export interface ChatMessageCommitter {
+  /** 落档一个 chat_message proposal。必须幂等：重复调用返回 skipped>0，不抛错。 */
+  commit(input: ChatMessageCommitInput): { committed: number; skipped: number };
+}

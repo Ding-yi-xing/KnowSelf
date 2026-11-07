@@ -1,0 +1,42 @@
+{
+  "descriptor_version": 1,
+  "reader_id": "tarry9110-txt-v1",
+  "platform": "wechat",
+  "timezone": "Asia/Shanghai",
+  "header": {
+    "prefix": "#",
+    "separator": " : ",
+    "keys": {
+      "会话对象": "conversation_key",
+      "显示名": "title",
+      "类型": "kind",
+      "消息数": "declared_count",
+      "时间范围": "time_range"
+    }
+  },
+  "conversation_kind": { "单聊": "direct", "群聊": "group" },
+  "date_separator": "^-{10} (\\d{4}-\\d{2}-\\d{2}) -{10}$",
+  "message_header": "^\\[([^\\]]+)\\] (.*)$",
+  "sender_separator": ": ",
+  "timestamp": {
+    "long": "YYYY-MM-DD HH:mm",
+    "short": "HH:mm",
+    "utc_offset_minutes": 480
+  },
+  "self_marker": { "kind": "literal", "value": "我" },
+  "unknown_sender": { "prefix": "未知(sender=", "suffix": ")" },
+  "content_type_exact": {
+    "[图片]": "image",
+    "[语音]": "voice",
+    "[视频]": "video",
+    "[表情]": "other",
+    "[系统消息]": "system",
+    "[消息]": "other"
+  },
+  "content_type_prefix": {
+    "[表情:": "other",
+    "[系统]": "system",
+    "[类型": "other"
+  },
+  "continuation": { "kind": "indent", "indent_chars": 4 }
+}

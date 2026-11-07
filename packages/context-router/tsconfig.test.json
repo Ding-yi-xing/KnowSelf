@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": ".",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    "noEmit": true
+  },
+  "references": [
+    { "path": "../contracts" },
+    { "path": "../config" },
+    { "path": "../profile-store" },
+    { "path": "../provider-adapter" },
+    { "path": "../mcp-host" }
+  ],
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["dist/**"]
+}

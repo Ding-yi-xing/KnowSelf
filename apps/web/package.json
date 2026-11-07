@@ -1,0 +1,36 @@
+{
+  "name": "@knowself/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@knowself/contracts": "*",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@tanstack/react-router": "^1.45.0",
+    "zustand": "^4.5.0",
+    "zod": "^3.23.0",
+    "lucide-react": "^0.428.0",
+    "clsx": "^2.1.0",
+    "tailwind-merge": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "vite": "^5.4.0",
+    "tailwindcss": "^4.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0",
+    "@testing-library/react": "^16.0.0",
+    "@playwright/test": "^1.45.0",
+    "jsdom": "^24.1.0"
+  }
+}

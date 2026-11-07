@@ -1,0 +1,32 @@
+{
+  "name": "@knowself/provider-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@knowself/contracts": "*",
+    "@knowself/config": "*",
+    "@knowself/mcp-host": "*",
+    "undici": "^6.19.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "msw": "^2.3.0"
+  }
+}

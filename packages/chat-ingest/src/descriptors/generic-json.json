@@ -1,0 +1,33 @@
+{
+  "descriptor_version": 1,
+  "reader_id": "generic-json-v1",
+  "platform": "wechat",
+  "timezone": "Asia/Shanghai",
+  "utc_offset_minutes": 480,
+  "file_suffix": ".json",
+  "conversation": {
+    "key_field": "conversation_key",
+    "title_field": "title",
+    "kind_field": "kind",
+    "messages_field": "messages"
+  },
+  "conversation_kind": {
+    "单聊": "direct",
+    "群聊": "group",
+    "direct": "direct",
+    "group": "group"
+  },
+  "message": {
+    "id_field": "message_id",
+    "ts_field": "ts_ms",
+    "ts_unit": "ms",
+    "sender_id_field": "sender_id",
+    "sender_name_field": "sender_name",
+    "role_field": "role",
+    "content_field": "content",
+    "content_type_field": "content_type",
+    "reply_to_field": "reply_to"
+  },
+  "self_marker": { "kind": "literal", "value": "我" },
+  "content_types": ["text", "image", "file", "link", "voice", "video", "system", "other"]
+}

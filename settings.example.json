@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+
+  "app": {
+    "locale": "zh-CN",
+    "theme": "system",
+    "open_browser_on_start": true,
+    "server_port": 5174,
+    "feature_flags": {
+      "auto_writeback": true,
+      "system_status_page": true,
+      "debug_panel": false
+    }
+  },
+
+  "conversation": {
+    "default_provider_id": "deepseek-pro",
+    "default_tools_enabled": true,
+    "default_write_back": true,
+    "max_tool_iterations": 8,
+    "history_retention_days": 0,
+    "history_messages_per_conversation": 500,
+    "writeback_provider_id": "deepseek-flash"
+  },
+
+  "providers": [
+    {
+      "id": "deepseek-pro",
+      "label": "DeepSeek V4 Pro (anthropic 接口)",
+      "protocol": "anthropic",
+      "base_url": "https://api.deepseek.com/anthropic",
+      "api_key": "sk-REPLACE-ME",
+      "model": "deepseek-v4-pro[1m]",
+      "purposes": ["chat"],
+      "default_for": ["chat"],
+      "request_timeout_ms": 120000,
+      "max_retries": 2,
+      "max_concurrency": 4,
+      "extra_headers": {},
+      "declared_supports_tools": true,
+      "declared_supports_caching": true,
+      "tags": ["主力", "长上下文"]
+    },
+    {
+      "id": "deepseek-flash",
+      "label": "DeepSeek V4 Flash (rerank/distill)",
+      "protocol": "openai",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-REPLACE-ME",
+      "model": "deepseek-v4-flash",
+      "purposes": ["rerank", "classify", "distill"],
+      "default_for": ["rerank", "classify", "distill"],
+      "request_timeout_ms": 60000,
+      "max_retries": 1,
+      "max_concurrency": 6,
+      "extra_headers": {},
+      "declared_supports_tools": false,
+      "declared_supports_caching": false,
+      "tags": ["快速", "便宜"]
+    }
+  ],
+
+  "mcp_servers": [
+    {
+      "id": "fetch",
+      "label": "Fetch (HTTP 抓取)",
+      "transport_config": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-fetch"],
+        "env": {}
+      },
+      "enabled": true,
+      "purpose": "primary_web_reader",
+      "startup_timeout_ms": 30000,
+      "request_timeout_ms": 60000,
+      "max_concurrency": 4,
+      "restart_on_crash": true,
+      "max_restarts": 3,
+      "dead_cooldown_ms": 300000
+    },
+    {
+      "id": "chrome-devtools",
+      "label": "Chrome DevTools (反爬兜底)",
+      "transport_config": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "chrome-devtools-mcp@latest", "--headless", "--isolated"],
+        "env": {}
+      },
+      "enabled": true,
+      "purpose": "fallback_when_fetch_fails",
+      "startup_timeout_ms": 60000,
+      "request_timeout_ms": 90000,
+      "max_concurrency": 2,
+      "restart_on_crash": true,
+      "max_restarts": 3,
+      "dead_cooldown_ms": 300000
+    }
+  ],
+
+  "builtin_tools": [],
+
+  "tool_defaults": {
+    "enabled_globally": true,
+    "fetch_fallback_policy": {
+      "enabled": true,
+      "primary_source_id": "fetch",
+      "fallback_source_id": "chrome-devtools",
+      "min_content_length": 100,
+      "fallback_keywords": [
+        "请验证",
+        "机器人",
+        "Access Denied",
+        "403",
+        "verify",
+        "captcha",
+        "forbidden"
+      ],
+      "trigger_on_non_2xx": true,
+      "include_hint": false
+    },
+    "per_template": {
+      "free_chat": true
+    },
+    "system_prompt_addendum": "你不能主动搜索网页。当需要网页内容时：1) 优先使用 fetch__fetch 抓取用户提到的具体 URL；2) 如果 fetch 返回反爬或内容异常，再用 chrome-devtools 系列工具；3) 不要臆造 URL。"
+  },
+
+  "retrieval": {
+    "enabled": true,
+    "embedding_model_id": "Xenova/bge-small-zh-v1.5",
+    "embedding_cache_dir": "data/models",
+    "chunk_target_tokens": 256,
+    "chunk_overlap_tokens": 32,
+    "parent_max_tokens": 2000,
+    "rrf_k": 60,
+    "rerank_provider_id": "deepseek-flash",
+    "rerank_model": "",
+    "rerank_top_k": 30,
+    "rerank_timeout_ms": 15000,
+    "classifier_provider_id": "deepseek-flash",
+    "classifier_max_cards": 3,
+    "token_budget": 20000,
+    "token_budget_l1": 1500,
+    "token_budget_l2": 2500,
+    "token_budget_l3": 4000,
+    "token_budget_history": 6000,
+    "freshness_boost": 0.1,
+    "memory_load_threshold": 5000,
+    "fallback_when_no_embed": true,
+    "fallback_when_no_rerank": true,
+    "fallback_when_no_classify": "last_used"
+  },
+
+  "ingestion": {
+    "distill_provider_id": "deepseek-flash",
+    "max_proposals_per_run": 8,
+    "max_file_size_bytes": 10485760,
+    "extracted_text_max_chars": 1000000,
+    "url_fetch_timeout_ms": 30000,
+    "auto_distill_after_chat": true,
+    "auto_distill_min_user_messages": 2
+  },
+
+  "storage": {
+    "data_dir": "data",
+    "exports_dir": "data/exports",
+    "backup_enabled": false,
+    "backup_keep_days": 30
+  }
+}

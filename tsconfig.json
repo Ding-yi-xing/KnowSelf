@@ -1,0 +1,18 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/contracts" },
+    { "path": "./packages/config" },
+    { "path": "./packages/profile-store" },
+    { "path": "./packages/person-store" },
+    { "path": "./packages/chat-ingest" },
+    { "path": "./packages/mining" },
+    { "path": "./packages/mcp-host" },
+    { "path": "./packages/provider-adapter" },
+    { "path": "./packages/ingestion" },
+    { "path": "./packages/context-router" },
+    { "path": "./packages/sync-provider" },
+    { "path": "./apps/server" },
+    { "path": "./apps/web" }
+  ]
+}

@@ -1,0 +1,31 @@
+node_modules/
+dist/
+build/
+target/
+coverage/
+.turbo/
+.tsbuildinfo
+*.tsbuildinfo
+
+# 用户运行时数据，不进 git
+settings.json
+data/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*
+
+# Tauri sidecar build artefacts
+apps/desktop/src-tauri/binaries/
+
+# Playwright
+playwright-report/
+test-results/
+# 浏览器自动化会话快照（page-*.yml，工具生成，非源码）
+.playwright-mcp/

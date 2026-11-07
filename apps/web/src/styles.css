@@ -1,0 +1,307 @@
+@import "tailwindcss";
+
+/* ============================================================
+   knowSelf — Apple-inspired design system (Tailwind v4)
+   亮色优先；点缀 Apple Blue；克制留白；字体即门面
+   ============================================================ */
+
+@theme {
+  /* —— 颜色 —— gray 阶梯参考 Apple HIG + macOS Big Sur */
+  --color-gray-25: #fdfdfd;
+  --color-gray-50: #fbfbfd;
+  --color-gray-100: #f5f5f7;
+  --color-gray-200: #e8e8ed;
+  --color-gray-300: #d2d2d7;
+  --color-gray-400: #a1a1a6;
+  --color-gray-500: #6e6e73;
+  --color-gray-600: #515154;
+  --color-gray-700: #3a3a3c;
+  --color-gray-800: #1d1d1f;
+  --color-gray-900: #0a0a0a;
+
+  /* 主点缀色：Apple Blue。仅用于主 CTA / 链接 / 选中态 */
+  --color-accent: #0071e3;
+  --color-accent-hover: #0077ed;
+  --color-accent-active: #006edb;
+  --color-accent-soft: #e8f1fc;
+
+  /* 状态色 — 克制饱和度，避免一眼就跳 */
+  --color-success: #28cd41;
+  --color-success-soft: #e8f8ec;
+  --color-warning: #ff9f0a;
+  --color-warning-soft: #fff4e0;
+  --color-danger: #ff3b30;
+  --color-danger-soft: #ffeceb;
+
+  /* 语义化别名（页面里都用语义名，不直接用 hex） */
+  --color-bg: #ffffff;
+  --color-bg-subtle: #fbfbfd;
+  --color-bg-muted: #f5f5f7;
+  --color-bg-overlay: rgba(0, 0, 0, 0.4);
+
+  --color-fg: #1d1d1f;
+  --color-fg-muted: #6e6e73;
+  --color-fg-subtle: #a1a1a6;
+  --color-fg-on-accent: #ffffff;
+
+  --color-border: #d2d2d7;
+  --color-border-subtle: #e8e8ed;
+  --color-border-strong: #a1a1a6;
+
+  /* —— 字体 —— Apple System 优先 */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue",
+    "Helvetica", "Inter", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+  --font-mono:
+    "SF Mono", "JetBrains Mono", "Menlo", "Monaco", "Consolas", "Liberation Mono", "Courier New",
+    monospace;
+
+  /* —— 字号尺度 —— Apple HIG 文本规范 */
+  --text-display: 48px;
+  --text-display--line-height: 1.08;
+  --text-display--letter-spacing: -0.02em;
+  --text-display--font-weight: 600;
+
+  --text-title-1: 32px;
+  --text-title-1--line-height: 1.125;
+  --text-title-1--letter-spacing: -0.015em;
+  --text-title-1--font-weight: 600;
+
+  --text-title-2: 24px;
+  --text-title-2--line-height: 1.2;
+  --text-title-2--letter-spacing: -0.01em;
+  --text-title-2--font-weight: 600;
+
+  --text-title-3: 20px;
+  --text-title-3--line-height: 1.25;
+  --text-title-3--letter-spacing: -0.005em;
+  --text-title-3--font-weight: 600;
+
+  --text-body: 15px;
+  --text-body--line-height: 1.5;
+  --text-body--letter-spacing: -0.003em;
+
+  --text-callout: 16px;
+  --text-callout--line-height: 1.4;
+
+  --text-caption: 13px;
+  --text-caption--line-height: 1.4;
+  --text-caption--letter-spacing: 0;
+
+  --text-micro: 11px;
+  --text-micro--line-height: 1.3;
+  --text-micro--letter-spacing: 0.02em;
+
+  /* —— 圆角 —— Apple 路线偏圆润，但不过度 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 9999px;
+
+  /* —— 阴影 —— 不靠强阴影，只用极轻浮起感 */
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.06), 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.08), 0 2px 6px -1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 12px 32px -4px rgba(0, 0, 0, 0.1), 0 4px 12px -2px rgba(0, 0, 0, 0.05);
+  --shadow-focus: 0 0 0 4px rgba(0, 113, 227, 0.18);
+
+  /* —— 过渡 —— 干脆利落，不黏腻 */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* ============================================================
+   暗色主题 — Apple 路线的深色版本
+   通过 <html class="dark"> 切换；token 本身覆盖，避免在每个组件写 dark: 前缀
+   ============================================================ */
+
+html.dark {
+  /* 语义化别名 — 暗色版 */
+  --color-bg: #000000;
+  --color-bg-subtle: #0a0a0a;
+  --color-bg-muted: #161618;
+  --color-bg-overlay: rgba(0, 0, 0, 0.6);
+
+  --color-fg: #f5f5f7;
+  --color-fg-muted: #a1a1a6;
+  --color-fg-subtle: #6e6e73;
+  --color-fg-on-accent: #ffffff;
+
+  --color-border: #2c2c2e;
+  --color-border-subtle: #1c1c1e;
+  --color-border-strong: #48484a;
+
+  /* 主点缀色：Apple Blue dark 版本（提亮 + 增饱和度，对深底更显眼） */
+  --color-accent: #2997ff;
+  --color-accent-hover: #4aa9ff;
+  --color-accent-active: #1f88f0;
+  --color-accent-soft: rgba(41, 151, 255, 0.14);
+
+  /* 状态色 — 暗底配 soft 透明 */
+  --color-success: #30d158;
+  --color-success-soft: rgba(48, 209, 88, 0.14);
+  --color-warning: #ff9f0a;
+  --color-warning-soft: rgba(255, 159, 10, 0.14);
+  --color-danger: #ff453a;
+  --color-danger-soft: rgba(255, 69, 58, 0.14);
+
+  /* 阴影 — 暗底用更深的阴影 + 微弱白边光 */
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.5), 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.6), 0 2px 6px -1px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 32px -4px rgba(0, 0, 0, 0.7), 0 4px 12px -2px rgba(0, 0, 0, 0.5);
+  --shadow-focus: 0 0 0 4px rgba(41, 151, 255, 0.32);
+}
+
+/* ============================================================
+   全局基础样式
+   ============================================================ */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+html {
+  /* Apple 字体的最佳渲染设置 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  letter-spacing: var(--text-body--letter-spacing);
+  color: var(--color-fg);
+  background-color: var(--color-bg);
+  /* 主题切换时背景与文字同步淡入 */
+  transition:
+    background-color var(--duration-base) var(--ease-standard),
+    color var(--duration-base) var(--ease-standard);
+}
+
+/* —— 选区配色 —— Apple Blue 半透 */
+::selection {
+  background-color: rgba(0, 113, 227, 0.22);
+  color: inherit;
+}
+
+/* —— 滚动条 —— macOS 风格细轨 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-clip: padding-box;
+}
+*:hover > ::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.32);
+  background-clip: padding-box;
+}
+
+html.dark *:hover > ::-webkit-scrollbar-thumb,
+html.dark *:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: padding-box;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+  background-clip: padding-box;
+}
+
+/* —— 焦点环：键盘可达，鼠标点击不显示 —— */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* —— 通用动效组件 —— */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pulse-cursor {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* utility classes */
+.fade-in {
+  animation: fade-in var(--duration-base) var(--ease-decelerate) both;
+}
+.slide-up {
+  animation: slide-up var(--duration-slow) var(--ease-spring) both;
+}
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background-color: var(--color-fg);
+  animation: pulse-cursor 1s var(--ease-standard) infinite;
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-muted) 0%,
+    var(--color-bg-subtle) 50%,
+    var(--color-bg-muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: var(--radius-md);
+}

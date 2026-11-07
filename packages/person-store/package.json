@@ -1,0 +1,27 @@
+{
+  "name": "@knowself/person-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@knowself/config": "*",
+    "@knowself/contracts": "*",
+    "better-sqlite3-multiple-ciphers": "^11.10.0"
+  }
+}
