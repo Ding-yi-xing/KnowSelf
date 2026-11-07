@@ -1,12 +1,14 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>knowSelf</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <!-- 首屏防闪：在 React 挂载前先按存储/系统偏好确定主题 -->
+    <title>knowSelf</title>
     <script>
+      // 首屏主题防闪：挂载前按存储/系统偏好决定 <html class="dark">。
+      // 行为与迁移前一致（localStorage 键 knowself-theme，支持 light/dark/system）。
       (function () {
         try {
           var saved = localStorage.getItem("knowself-theme");

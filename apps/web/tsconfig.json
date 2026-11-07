@@ -12,6 +12,6 @@
     "types": ["vite/client", "node"]
   },
   "references": [{ "path": "../../packages/contracts" }],
-  "include": ["src/**/*", "src/locales/*.json"],
-  "exclude": ["tests/**", "e2e/**", "dist/**"]
+  "include": ["src/**/*"],
+  "exclude": ["tests/**", "e2e/**", "dist/**", "node_modules/**"]
 }

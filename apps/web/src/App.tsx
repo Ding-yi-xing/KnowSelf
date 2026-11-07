@@ -1,141 +1,163 @@
 /**
- * App — 根组件，含基于 useState 的页面路由。
+ * App —— 独立壳根组件。
+ *
+ * 保持迁移前的用户可见行为：
+ *   - 9 条 URL 路由 + 浏览器前进/后退
+ *   - Ctrl/⌘+K 命令面板、Ctrl/⌘+N 回到对话、Esc 关闭
+ *   - 主题（localStorage `knowself-theme` / 系统偏好）
+ *   - 每 5s 轮询 /api/system/status（失败静默降级为「服务离线」）
+ * 实现全部重写，不引用旧前端任何模块。
  */
-import { useState, useCallback, useEffect, useRef } from "react";
-import type { FC } from "react";
-import { AppLayout } from "./components/AppLayout";
-import type { PageId } from "./components/AppLayout";
-import { ChatPage } from "./pages/ChatPage";
-import { InboxPage } from "./pages/InboxPage";
-import { ProfilePage } from "./pages/ProfilePage";
-import { CardsPage } from "./pages/CardsPage";
-import { JournalPage } from "./pages/JournalPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { SystemPage } from "./pages/SystemPage";
-import { SourcesPage } from "./pages/SourcesPage";
-import { TemplatesPage } from "./pages/TemplatesPage";
-import { useTheme } from "./hooks/useTheme";
-import { CommandPalette } from "./components/CommandPalette";
-import { useChatStore } from "./stores/chat";
-import { useTransport } from "./stores/transport-context";
-import { useSettingsStore } from "./stores/settings";
-import { usePollSystemStatus } from "./hooks/usePollSystemStatus";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AppShell } from "./shell/AppShell";
+import { NAV_ITEMS, labelForPage, pageFromLocation, pathForPage, type PageId } from "./routes";
+import { InboxPage } from "./features/inbox/InboxPage";
+import { PlaceholderPage } from "./features/placeholder/PlaceholderPage";
+import { api } from "./transport/http";
 
-const PAGE_MAP: Record<PageId, FC> = {
-  chat: ChatPage,
-  inbox: InboxPage,
-  profile: ProfilePage,
-  cards: CardsPage,
-  journal: JournalPage,
-  settings: SettingsPage,
-  system: SystemPage,
-  sources: SourcesPage,
-  templates: TemplatesPage,
-};
+type Theme = "light" | "dark";
 
-/** URL pathname → PageId 映射 */
-const PATH_TO_PAGE: Record<string, PageId> = {
-  "/": "chat",
-  "/chat": "chat",
-  "/inbox": "inbox",
-  "/profile": "profile",
-  "/cards": "cards",
-  "/journal": "journal",
-  "/settings": "settings",
-  "/system": "system",
-  "/sources": "sources",
-  "/templates": "templates",
-};
+const THEME_KEY = "knowself-theme";
 
-/** PageId → URL pathname 映射 */
-const PAGE_TO_PATH: Record<PageId, string> = {
-  chat: "/",
-  inbox: "/inbox",
-  profile: "/profile",
-  cards: "/cards",
-  journal: "/journal",
-  settings: "/settings",
-  system: "/system",
-  sources: "/sources",
-  templates: "/templates",
-};
-
-/** 从当前 URL 推断初始页面 */
-function pageFromUrl(): PageId {
-  return PATH_TO_PAGE[window.location.pathname] ?? "chat";
+function readTheme(): Theme {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
 }
 
 export function App() {
-  // ═══ Bootstrap: 首次挂载加载 settings + 启动系统状态轮询 ═══
-  const transport = useTransport();
-  const booted = useRef(false);
-  if (!booted.current) {
-    booted.current = true;
-    void useSettingsStore.getState().load(transport);
-  }
-  usePollSystemStatus(5000);
-
-  // 顶层挂一次：确保任何页面切换主题后，<html.dark> 立即生效
-  useTheme();
-
-  const [currentPage, setCurrentPage] = useState<PageId>(pageFromUrl);
+  const [currentPage, setCurrentPage] = useState<PageId>(() =>
+    pageFromLocation(window.location.pathname),
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const startConversation = useChatStore((s) => s.startConversation);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const [online, setOnline] = useState<boolean | null>(null);
 
-  const handleNavigate = useCallback((page: PageId) => {
+  const navigate = useCallback((page: PageId) => {
     setCurrentPage(page);
-    const path = PAGE_TO_PATH[page];
-    if (window.location.pathname !== path) {
-      window.history.pushState(null, "", path);
-    }
+    const path = pathForPage(page);
+    if (window.location.pathname !== path) window.history.pushState(null, "", path);
+    setPaletteOpen(false);
+    setPaletteQuery("");
   }, []);
 
-  // 浏览器后退/前进
   useEffect(() => {
-    const onPopState = () => {
-      setCurrentPage(pageFromUrl());
-    };
+    const onPopState = () => setCurrentPage(pageFromLocation(window.location.pathname));
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  // 全局键盘快捷键
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-
-      if (mod && e.key === "k") {
-        e.preventDefault();
-        setPaletteOpen((prev) => !prev);
-      } else if (mod && e.key === "n") {
-        e.preventDefault();
-        startConversation();
-        setCurrentPage("chat");
-      } else if (e.key === "Escape") {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      } else if (mod && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        navigate("chat");
+      } else if (event.key === "Escape") {
         setPaletteOpen(false);
       }
     };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [navigate]);
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [startConversation]);
+  useEffect(() => {
+    const apply = (next: Theme) => {
+      document.documentElement.classList.toggle("dark", next === "dark");
+      setTheme(next);
+    };
+    const onSchemeChange = (event: MediaQueryListEvent) => {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved === "system" || saved === null) apply(event.matches ? "dark" : "light");
+    };
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", onSchemeChange);
+    return () => media.removeEventListener("change", onSchemeChange);
+  }, []);
 
-  const PageComponent = PAGE_MAP[currentPage];
+  const toggleTheme = useCallback(() => {
+    const next: Theme = readTheme() === "dark" ? "light" : "dark";
+    document.documentElement.classList.toggle("dark", next === "dark");
+    localStorage.setItem(THEME_KEY, next);
+    setTheme(next);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        await api.systemStatus();
+        if (!cancelled) setOnline(true);
+      } catch {
+        if (!cancelled) setOnline(false);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const matches = useMemo(() => {
+    const q = paletteQuery.trim().toLowerCase();
+    return NAV_ITEMS.filter((item) => q === "" || item.label.includes(q) || item.path.includes(q));
+  }, [paletteQuery]);
 
   return (
     <>
-      <AppLayout currentPage={currentPage} onNavigate={handleNavigate}>
-        {currentPage === "chat" ? (
-          <ChatPage onNavigate={handleNavigate} />
+      <AppShell
+        currentPage={currentPage}
+        onNavigate={navigate}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        online={online}
+        paletteOpen={paletteOpen}
+      >
+        {currentPage === "inbox" ? (
+          <InboxPage />
         ) : (
-          <PageComponent />
+          <PlaceholderPage page={currentPage} onNavigate={navigate} />
         )}
-      </AppLayout>
-      <CommandPalette
-        open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        onNavigate={handleNavigate}
-      />
+      </AppShell>
+
+      {paletteOpen && (
+        <div
+          className="palette-backdrop"
+          onClick={() => setPaletteOpen(false)}
+          role="presentation"
+        >
+          <div className="palette card" onClick={(event) => event.stopPropagation()} role="dialog" aria-label="命令面板">
+            <input
+              className="textarea"
+              style={{ minHeight: 40 }}
+              autoFocus
+              placeholder="输入页面名称跳转…"
+              value={paletteQuery}
+              onChange={(event) => setPaletteQuery(event.target.value)}
+            />
+            <div className="palette-list">
+              {matches.map((item) => (
+                <button
+                  key={item.id}
+                  className="nav-item"
+                  onClick={() => navigate(item.id)}
+                >
+                  <span>{item.label}</span>
+                  <span className="card-meta">{item.path}</span>
+                </button>
+              ))}
+              {matches.length === 0 && <div className="card-meta" style={{ padding: 12 }}>无匹配页面</div>}
+            </div>
+            <div className="card-meta" style={{ padding: "0 4px 4px" }}>
+              {labelForPage(currentPage)} · Ctrl/⌘+K 开关 · Esc 关闭
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
