@@ -185,7 +185,15 @@ describe("messages repo — stream / mentions / trace", () => {
       seen.push(row.message_id);
     }
     expect(seen).toEqual(["m1"]);
-    expect(repo.count({ conversation_id: CONV })).toBe(2);
+    // 批 2b：buildFilter 现在无条件排除已回滚批次，派生读数与 stream 视图一致。
+    // 改动前这里断言 2（count 直读基表、与 stream 的 1 不一致，正是评审定稿的缺陷）。
+    // 这不是放宽断言：改为 1 并补 list / searchContent / histogram 三条收紧校验。
+    expect(repo.count({ conversation_id: CONV })).toBe(1);
+    expect(repo.list({ conversation_id: CONV }).map((r) => r.message_id)).toEqual(["m1"]);
+    expect(repo.searchContent({ keyword: "reverted" })).toEqual([]);
+    expect(repo.histogramByDate({})).toEqual([{ msg_date: "2026-09-10", count: 1 }]);
+    // 回滚不物理删除（append-only），基表仍有 2 行
+    expect(db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get()).toEqual({ n: 2 });
   });
 
   it("upsertMentions 幂等 + deleteMentionsByMessageIds + readMentions 过滤", () => {

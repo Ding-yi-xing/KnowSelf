@@ -195,6 +195,92 @@ describe("buildChatIndex", () => {
   });
 });
 
+describe("批 2b 修复：空会话（整会话被撤销）必须清掉旧索引", () => {
+  it("listMessages 返回 0 时删净 chat_chunks / FTS，并如实计数 cleanedEmptyConversations", async () => {
+    // 场景：某会话全部消息来自被撤批次。chat_conversations 仍在 ⇒ 会话进循环，
+    // 但 buildFilter 守卫让 listMessages 返回 0。旧实现只 skip ⇒ 旧 chunk/ FTS 残留。
+    const TOKEN = "revertedtoken";
+    let messages = [msg("m1", "gone", 0, TOKEN)];
+    const source: ChatIndexSource = {
+      listConversations: () => [
+        { conversation_id: "gone", title: "", kind: "direct", owner_person_id: "me" },
+      ],
+      listMessages: (_conv, _limit, offset) => messages.slice(offset, offset + 1),
+    };
+
+    // 1) 撤销前：先建出旧索引，FTS 能命中
+    const built = await buildChatIndex({ db, embedFn: null, modelId: "test" }, source);
+    expect(built.chunkCount).toBe(1);
+    const fts = createChatFtsRetriever(db);
+    expect((await fts.search(TOKEN, 10)).length).toBeGreaterThan(0);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM chat_chunks WHERE conversation_id = 'gone'").get() as {
+        n: number;
+      }).n,
+    ).toBe(1);
+
+    // 2) 消息全部被撤：源读口变空
+    messages = [];
+    const rebuilt = await buildChatIndex({ db, embedFn: null, modelId: "test" }, source, {
+      conversationIds: ["gone"],
+    });
+
+    // 3) 旧索引确实被删净，且结果计数如实（不能只报 skippedConversations）
+    expect(rebuilt.skippedConversations).toBe(1);
+    expect(rebuilt.cleanedEmptyConversations).toBe(1);
+    expect(rebuilt.conversationCount).toBe(0);
+    expect(rebuilt.chunkCount).toBe(0);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM chat_chunks WHERE conversation_id = 'gone'").get() as {
+        n: number;
+      }).n,
+    ).toBe(0);
+    expect((await fts.search(TOKEN, 10)).length).toBe(0);
+    // FTS 影子表也同步（chat_chunks 的 AFTER DELETE 触发器）
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM chat_chunks_fts").get() as { n: number }).n,
+    ).toBe(0);
+  });
+
+  it("幂等：无可删残留时不虚报 cleanedEmptyConversations", async () => {
+    const source: ChatIndexSource = {
+      listConversations: () => [
+        { conversation_id: "empty", title: "", kind: "direct", owner_person_id: "me" },
+      ],
+      listMessages: () => [],
+    };
+    const result = await buildChatIndex({ db, embedFn: null, modelId: "test" }, source);
+    expect(result.skippedConversations).toBe(1);
+    expect(result.cleanedEmptyConversations).toBe(0); // 本来就没有残留，不能虚报
+  });
+
+  it("不影响其它会话：只清理空的那个，非空会话照常重建", async () => {
+    const convs: Record<string, ChatIndexMessage[]> = {
+      gone: [msg("m1", "gone", 0, "revertedtoken")],
+      kept: [msg("m2", "kept", 0, "kepttoken")],
+    };
+    const source = makeSource(convs);
+    await buildChatIndex({ db, embedFn: null, modelId: "test" }, source);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM chat_chunks").get() as { n: number }).n,
+    ).toBe(2);
+
+    convs["gone"] = []; // 撤销 gone 的全部消息
+    const rebuilt = await buildChatIndex({ db, embedFn: null, modelId: "test" }, source);
+    expect(rebuilt.cleanedEmptyConversations).toBe(1);
+    expect(rebuilt.conversationCount).toBe(1);
+    expect(rebuilt.chunkCount).toBe(1);
+
+    const fts = createChatFtsRetriever(db);
+    expect((await fts.search("revertedtoken", 10)).length).toBe(0);
+    expect((await fts.search("kepttoken", 10)).length).toBeGreaterThan(0);
+    const rows = db.prepare("SELECT conversation_id FROM chat_chunks").all() as {
+      conversation_id: string;
+    }[];
+    expect(rows).toEqual([{ conversation_id: "kept" }]);
+  });
+});
+
 describe("schema 迁移", () => {
   it("新库 schema_version = 3，且 chat 表与 1024 维向量表就绪", () => {
     const version = db

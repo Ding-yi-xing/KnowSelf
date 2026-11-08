@@ -26,6 +26,11 @@ import { createMessagesRepo, type MessagesRepo } from "./repository/messages";
 import { createMetricsRepo, type MetricsRepo } from "./repository/metrics";
 import { createPersonsRepo, type PersonsRepo } from "./repository/persons";
 import { createRelationshipsRepo, type RelationshipsRepo } from "./repository/relationships";
+import {
+  createReviewRequiredRepo,
+  type ReviewRequiredConversation,
+  type ReviewRequiredRepo,
+} from "./repository/review-required";
 import { createStagingRepo, type StagingRepo } from "./repository/staging";
 import { revertBatch, type RevertBatchInput, type RevertBatchResult } from "./revert";
 import type { PersonListQuery, PersonRow } from "./types";
@@ -60,6 +65,13 @@ export interface PersonStore {
   listPersons(q?: PersonListQuery): PersonRow[];
   /** DESIGN-13 §4.2 能力 7：读 `persons_meta`（含 `timezone` / `schema_version`）。 */
   getMeta(key: string): string | undefined;
+  /**
+   * 批 2b 加法式：「因撤销而待复核」的会话集合（粘性解除探针，见 review-required.ts）。
+   * 由 CLI 合并进 `tierConfig.review` ⇒ `MANUAL_FLAG` ⇒ Tier B，判定链路不改。
+   */
+  listReviewRequiredConversations(): ReviewRequiredConversation[];
+  /** 单会话判据（供 UI 徽标「此前撤销 · 需重新确认」消费，零新增查询）。 */
+  isReviewRequired(conversationId: string): boolean;
   transaction<T>(fn: () => T): T;
   close(): void;
 }
@@ -74,6 +86,7 @@ export function createPersonStore(opts: PersonStoreOptions): PersonStore {
   const relationships = createRelationshipsRepo(db);
   const events = createEventsRepo(db);
   const metrics = createMetricsRepo(db);
+  const reviewRequired: ReviewRequiredRepo = createReviewRequiredRepo(db);
   const bus = createPersonsEventBus();
   const deps: IdentityDeps = {
     persons,
@@ -124,6 +137,8 @@ export function createPersonStore(opts: PersonStoreOptions): PersonStore {
     getPerson: (personId) => persons.get(personId),
     listPersons: (q) => persons.list(q),
     getMeta: (key) => getPersonMeta(db, key),
+    listReviewRequiredConversations: () => reviewRequired.listReviewRequiredConversations(),
+    isReviewRequired: (conversationId) => reviewRequired.isReviewRequired(conversationId),
     transaction<T>(fn: () => T): T {
       return db.transaction(fn)();
     },

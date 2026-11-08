@@ -1,9 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
+    "outDir": "./dist-types",
     "rootDir": "./src",
-    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    "tsBuildInfoFile": "./dist-types/.tsbuildinfo",
     "jsx": "react-jsx",
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": false,
@@ -13,5 +13,5 @@
   },
   "references": [{ "path": "../../packages/contracts" }],
   "include": ["src/**/*"],
-  "exclude": ["tests/**", "e2e/**", "dist/**", "node_modules/**"]
+  "exclude": ["tests/**", "e2e/**", "dist/**", "dist-types/**", "node_modules/**"]
 }

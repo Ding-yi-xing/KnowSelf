@@ -146,12 +146,16 @@ export function createMessagesRepo(db: PersonDb): MessagesRepo {
       extra.push("m.msg_date <= ?");
       params.push(q.to_date);
     }
+    // 批 2b 下游适配：buildFilter 现在恒返回非空 where（含 REVERTED_BATCH_GUARD）。
+    // 无额外日期条件时不能再拼 `... AND ` —— 会产生尾随 AND 的 SQL 语法错误。
+    // 零回滚批次下 guard 恒 TRUE，本改动对 histogramByDate 的结果是 no-op（验收 6）。
+    // f.where === "" 的分支保留，供未来构造器回归时继续正确。
     const where =
-      f.where === ""
-        ? extra.length > 0
+      extra.length === 0
+        ? f.where
+        : f.where === ""
           ? `WHERE ${extra.join(" AND ")}`
-          : ""
-        : `${f.where} AND ${extra.join(" AND ")}`;
+          : `${f.where} AND ${extra.join(" AND ")}`;
     return db
       .prepare(
         `SELECT m.msg_date AS msg_date, COUNT(*) AS count FROM chat_messages m ${f.join} ${where}

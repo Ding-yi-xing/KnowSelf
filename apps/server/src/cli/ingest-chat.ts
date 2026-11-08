@@ -8,13 +8,18 @@
  * 用法：
  *   npx tsx apps/server/src/cli/ingest-chat.ts --dir "<导出目录>" [--source-id <id>] [--only 张三] [--no-index]
  *   npm run ingest:chat -- --dir "<导出目录>"
+ *   npx tsx apps/server/src/cli/ingest-chat.ts --revert <batch_id>   # 批 2b：回滚最近一个成功批次
  *
  * 行为：
  *   1. 复用 `bootRuntime`（与 server 完全一致的装配：profileStore / personStore / ingestion / contextRouter）
  *   2. 未给 `--source-id` 时创建一条 `paste` 型 Source 作为本次导入的载体
- *   3. Tier 名单从 `data/chat-ingest/{auto_ok,review}.txt` 读取（每行一个 id，# 开头为注释）
+ *   3. Tier 名单从 `data/chat-ingest/{auto_ok,review}.txt` 读取（每行一个 id，# 开头为注释），
+ *      再合并「因撤销而待复核」的会话集合（批 2b / 11b，命中 MANUAL_FLAG ⇒ Tier B）
  *   4. `ingestExport` → Tier A 自动 accept → 经 chatCommitter 落 persons.sqlite
  *   5. 默认导入后重建聊天索引（`--no-index` 跳过），保证导入完即可被检索
+ *
+ * `--revert` 是回滚四步 ③ 的调用方出口：revertBatch 后按受影响会话重建聊天索引，
+ * 不新增 HTTP path（DESIGN-19 §3-Q1 未定稿，不自造 path）。
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -24,6 +29,11 @@ import { bootRuntime } from "../orchestrator/init";
 import { createProfileProposalSink } from "../orchestrator/chat-proposal-sink";
 import { createChatMessageCommitter } from "@knowself/chat-ingest";
 import type { CreateSourceRequest } from "@knowself/contracts";
+import {
+  deriveTierConfig,
+  formatRevertOutput,
+  runRevert,
+} from "./revert";
 
 interface CliOptions {
   dir: string;
@@ -31,9 +41,12 @@ interface CliOptions {
   only: string[];
   rebuildIndex: boolean;
   rootDir: string;
+  /** 批 2b：`--revert <batch_id>`；设置后走回滚分支，不再要求 --dir。 */
+  revert?: string;
 }
 
-function parseArgs(argv: readonly string[]): CliOptions {
+/** 导出供装配层单测（不改函数结构）；仅当本文件作为 CLI 直接运行时才启动 main。 */
+export function parseArgs(argv: readonly string[]): CliOptions {
   const opts: CliOptions = {
     dir: "",
     only: [],
@@ -59,6 +72,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case "--root":
         opts.rootDir = argv[++i] ?? process.cwd();
         break;
+      case "--revert":
+        opts.revert = argv[++i] ?? "";
+        break;
       case "--help":
       case "-h":
         printUsage();
@@ -68,6 +84,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
         if (arg.startsWith("--dir=")) opts.dir = arg.slice(6);
         else if (arg.startsWith("--source-id=")) opts.sourceId = arg.slice(12);
         else if (arg.startsWith("--only=")) opts.only.push(arg.slice(7));
+        else if (arg.startsWith("--revert=")) opts.revert = arg.slice(9);
         else {
           console.error(`未知参数：${arg}`);
           printUsage();
@@ -91,9 +108,11 @@ function printUsage(): void {
       "  --only <keyword>    只导入 conversation_key / title 命中关键字的会话，可重复",
       "  --no-index          导入后不重建聊天索引（默认会重建）",
       "  --root <path>       项目根目录（默认当前工作目录，需含 settings.json）",
+      "  --revert <batch_id> 回滚最近一个 succeeded 批次（不删聊天记录）；撤销后按会话重建检索索引",
       "  -h, --help          显示本帮助",
       "",
       "Tier 名单：data/chat-ingest/auto_ok.txt、data/chat-ingest/review.txt（每行一个 id，# 为注释）",
+      "  撤销过的会话会自动进入强制复核，直到你接受并实际落档一批新消息（Tier B）。",
     ].join("\n"),
   );
 }
@@ -115,8 +134,45 @@ function loadTierConfig(rootDir: string): IngestTierConfig {
   };
 }
 
+/**
+ * 批 2b 回滚出口（CLI 子命令，不新增 HTTP path）。
+ * 索引重建放这里（调用方），失败由 runRevert 冒泡到 main().catch，绝不静默吞。
+ */
+async function runRevertCommand(batchId: string, rootDir: string): Promise<void> {
+  const { runtime } = await bootRuntime(rootDir);
+  try {
+    const outcome = await runRevert(
+      {
+        store: runtime.personStore,
+        now: new Date().toISOString(),
+        rebuildChatIndex: (conversationIds) =>
+          runtime.contextRouter.buildChatIndex({ conversationIds }),
+      },
+      batchId,
+    );
+    for (const line of formatRevertOutput(outcome)) console.log(line);
+  } finally {
+    for (const item of [...runtime.shutdownItems].reverse()) {
+      try {
+        await item.fn();
+      } catch (error) {
+        console.warn(`[revert] 清理 ${item.name} 失败：`, String(error));
+      }
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.revert !== undefined) {
+    if (opts.revert === "") {
+      console.error("缺少 --revert 的 batch_id");
+      printUsage();
+      process.exit(2);
+    }
+    await runRevertCommand(opts.revert, opts.rootDir);
+    return;
+  }
   if (!opts.dir) {
     console.error("缺少必填参数 --dir");
     printUsage();
@@ -154,10 +210,13 @@ async function main(): Promise<void> {
       acceptProposal: (id) => runtime.ingestion.acceptProposal(id),
     });
     const chatCommitter = createChatMessageCommitter(runtime.personStore);
-    const tierConfig = loadTierConfig(opts.rootDir);
+    // 批 2b / 11b：把「因撤销而待复核」的会话集合合并进 review ⇒ MANUAL_FLAG ⇒ Tier B。
+    // 判定链路不改，只在装配层派生；这是该新增公开方法的生产注入点（可达性验收）。
+    const tierConfig = deriveTierConfig(loadTierConfig(opts.rootDir), runtime.personStore);
+    const reviewRequired = runtime.personStore.listReviewRequiredConversations();
 
     console.log(
-      `[chat-ingest] Tier 名单：auto_ok=${tierConfig.auto_ok?.length ?? 0} 条，review=${tierConfig.review?.length ?? 0} 条`,
+      `[chat-ingest] Tier 名单：auto_ok=${tierConfig.auto_ok?.length ?? 0} 条，review=${tierConfig.review?.length ?? 0} 条（其中因撤销强制复核 ${reviewRequired.length} 个会话）`,
     );
 
     // 3. 执行导入
@@ -222,7 +281,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error("[chat-ingest] 导入失败：", error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+// 只有当本文件是入口脚本时才跑 main：被测试 import 时不启动 CLI（否则会吃 vitest 的 argv）。
+// 同时覆盖 tsx 源码执行（.ts）与 tsc 产物执行（dist/cli/ingest-chat.js）。
+const entryPath = (process.argv[1] ?? "").replace(/\\/g, "/");
+const isCliEntry = /\/cli\/ingest-chat\.(ts|js|mjs)$/.test(entryPath);
+if (isCliEntry) {
+  main().catch((error) => {
+    console.error("[chat-ingest] 导入失败：", error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

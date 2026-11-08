@@ -3,7 +3,7 @@
  *
  * 保持迁移前的用户可见行为：
  *   - 9 条 URL 路由 + 浏览器前进/后退
- *   - Ctrl/⌘+K 命令面板、Ctrl/⌘+N 回到对话、Esc 关闭
+ *   - Ctrl/⌘+K 命令面板、Ctrl/⌘+N 新建会话并回到对话页、Esc 关闭
  *   - 主题（localStorage `knowself-theme` / 系统偏好）
  *   - 每 5s 轮询 /api/system/status（失败静默降级为「服务离线」）
  * 实现全部重写，不引用旧前端任何模块。
@@ -12,7 +12,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "./shell/AppShell";
 import { NAV_ITEMS, labelForPage, pageFromLocation, pathForPage, type PageId } from "./routes";
 import { InboxPage } from "./features/inbox/InboxPage";
+import { ChatPage } from "./features/chat/ChatPage";
 import { PlaceholderPage } from "./features/placeholder/PlaceholderPage";
+import {
+  ChatCommandContext,
+  type ChatCommandState,
+} from "./features/chat/ChatCommandContext";
 import { api } from "./transport/http";
 
 type Theme = "light" | "dark";
@@ -31,6 +36,25 @@ export function App() {
   const [paletteQuery, setPaletteQuery] = useState("");
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [online, setOnline] = useState<boolean | null>(null);
+
+  // Ctrl/⌘+N 的一次性「新建会话」命令：token 递增 → ChatPage 消费 → 归零。
+  const [newConversationToken, setNewConversationToken] = useState(0);
+  const requestNewConversation = useCallback(
+    () => setNewConversationToken((token) => token + 1),
+    [],
+  );
+  const consumeNewConversation = useCallback(
+    () => setNewConversationToken(0),
+    [],
+  );
+  const chatCommands = useMemo<ChatCommandState>(
+    () => ({
+      newConversationToken,
+      requestNewConversation,
+      consumeNewConversation,
+    }),
+    [newConversationToken, requestNewConversation, consumeNewConversation],
+  );
 
   const navigate = useCallback((page: PageId) => {
     setCurrentPage(page);
@@ -55,13 +79,14 @@ export function App() {
       } else if (mod && event.key.toLowerCase() === "n") {
         event.preventDefault();
         navigate("chat");
+        requestNewConversation();
       } else if (event.key === "Escape") {
         setPaletteOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigate]);
+  }, [navigate, requestNewConversation]);
 
   useEffect(() => {
     const apply = (next: Theme) => {
@@ -108,7 +133,7 @@ export function App() {
   }, [paletteQuery]);
 
   return (
-    <>
+    <ChatCommandContext.Provider value={chatCommands}>
       <AppShell
         currentPage={currentPage}
         onNavigate={navigate}
@@ -117,7 +142,9 @@ export function App() {
         online={online}
         paletteOpen={paletteOpen}
       >
-        {currentPage === "inbox" ? (
+        {currentPage === "chat" ? (
+          <ChatPage onNavigate={navigate} />
+        ) : currentPage === "inbox" ? (
           <InboxPage />
         ) : (
           <PlaceholderPage page={currentPage} onNavigate={navigate} />
@@ -158,6 +185,6 @@ export function App() {
           </div>
         </div>
       )}
-    </>
+    </ChatCommandContext.Provider>
   );
 }

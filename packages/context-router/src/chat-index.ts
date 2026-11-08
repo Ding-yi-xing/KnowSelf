@@ -54,6 +54,13 @@ export interface ChatIndexResult {
   chunkCount: number;
   embeddedCount: number;
   skippedConversations: number;
+  /**
+   * 批 2b 修复：空消息会话中**确实清掉了旧索引**的会话数。
+   * `skippedConversations` 只说明「没建新行」，不能说明「旧行还在」；
+   * 本字段 >0 表示调用方要求的清理动作真的执行了（有 chunk 被删除）。
+   * 幂等：无可删时保持 0，不虚报。
+   */
+  cleanedEmptyConversations: number;
 }
 
 interface WindowMessage {
@@ -144,8 +151,11 @@ interface Deps {
   now?: () => string;
 }
 
-/** 删除某会话的全部聊天索引（含 FTS 与向量映射）。 */
-export function deleteChatConversationIndex(db: RetrievalDb, conversationId: string): void {
+/**
+ * 删除某会话的全部聊天索引（含 FTS 与向量映射）。
+ * 返回实际删除的 `chat_chunks` 行数，供调用方如实计数（0 = 本来就没有残留）。
+ */
+export function deleteChatConversationIndex(db: RetrievalDb, conversationId: string): number {
   const ids = db
     .prepare("SELECT id FROM chat_chunks WHERE conversation_id = ?")
     .all(conversationId) as { id: number }[];
@@ -166,7 +176,8 @@ export function deleteChatConversationIndex(db: RetrievalDb, conversationId: str
     "DELETE FROM chat_vec_chunk_map WHERE chunk_id IN (SELECT id FROM chat_chunks WHERE conversation_id = ?)",
   ).run(conversationId);
   // chat_chunks 的 AFTER DELETE 触发器同步删 FTS 行
-  db.prepare("DELETE FROM chat_chunks WHERE conversation_id = ?").run(conversationId);
+  const deleted = db.prepare("DELETE FROM chat_chunks WHERE conversation_id = ?").run(conversationId);
+  return deleted.changes;
 }
 
 /**
@@ -196,6 +207,7 @@ export async function buildChatIndex(
     chunkCount: 0,
     embeddedCount: 0,
     skippedConversations: 0,
+    cleanedEmptyConversations: 0,
   };
 
   const insertChunk = deps.db.prepare(
@@ -221,7 +233,18 @@ export async function buildChatIndex(
       if (page.length < pageSize) break;
     }
     if (messages.length === 0) {
+      // 批 2b 修复（QA 独立复核确认为真实业务缺陷）：
+      // 「某会话全部消息都来自被撤批次」时，chat_conversations 仍在（append-only），
+      // 会话会进本循环；但 buildFilter 守卫让 listMessages 返回 0。旧实现只计
+      // skippedConversations 就 continue，跳过 deleteChatConversationIndex ⇒
+      // 旧 chat_chunks / FTS / 向量残留，已撤内容仍可被 L3 聊天检索召回（假撤销 / 泄漏）。
+      // 修法：与「先删后建」同一事务语义，在此分支也删净该会话索引。
+      const removed = deps.db.transaction(() =>
+        deleteChatConversationIndex(deps.db, conv.conversation_id),
+      )();
       result.skippedConversations += 1;
+      // 如实计数：只有真删掉残留 chunk 才算「清理过」，幂等重跑不会虚报
+      if (removed > 0) result.cleanedEmptyConversations += 1;
       continue;
     }
 

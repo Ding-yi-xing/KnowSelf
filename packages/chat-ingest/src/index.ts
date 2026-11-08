@@ -766,6 +766,11 @@ export async function ingestExport(options: IngestExportOptions): Promise<Ingest
     tool_version: feed.tool_version,
     now,
   });
+  // 批 2b 回滚四步 ②：游标快照必须在**本批次推进游标之前**采集，否则 revertBatch 的
+  // restoreCursors 只会把「批次跑完后的游标」写回去，等于回滚空转（restored 恒 0）。
+  // 主干此前从未调用 snapshotCursors（生产零调用），ingest_batches.cursor_snapshot_json 恒 NULL。
+  // 放在 beginBatch 之后、两种模式之前：legacy 与 pipeline 都被覆盖。
+  store.staging.snapshotCursors({ batch_id: batchId, now });
   const pipeline = resolvePipeline({ ...options, batch_id: batchId }, now);
   if (pipeline === null) {
     return runLegacyMode(options, feed, batchId, now);

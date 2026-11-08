@@ -1,14 +1,17 @@
 /**
- * 迁移占位页 —— 其余 8 个页面在本轮「先骨架 + 试点页」节奏中保留路由与导航，
+ * 迁移占位页 —— 对话与待整理已迁移，其余 7 页保留路由与导航，
  * 页面内容标注原功能范围，待后续逐页迁移。
  * 用户可见行为：点击侧栏能切换、URL 变化、前进/后退有效（与迁移前一致）。
  */
 import { labelForPage, pathForPage, type PageId } from "../../routes";
 import { Button, Card, PageHeader } from "../../ui/primitives";
 
+/** 本轮已完成功能迁移的页面；占位页只在其余页面渲染。 */
+const MIGRATED_PAGES: ReadonlySet<PageId> = new Set<PageId>(["chat", "inbox"]);
+
 const SCOPE: Readonly<Record<PageId, string>> = {
-  chat: "多会话对话、流式输出、工具调用气泡、模型选择、消息编辑与中止。",
-  inbox: "（本轮已迁移为试点页）",
+  chat: "（本轮已迁移）多会话列表、SSE 流式输出、工具调用气泡、中止、模型选择。",
+  inbox: "（本轮已迁移为试点页）pending 提案的接受 / 编辑 / 拒绝。",
   profile: "核心画像查看与编辑、导出/导入、画像统计。",
   cards: "画像卡片列表、分区编辑、增删改。",
   journal: "按日期浏览与编辑日志条目。",
@@ -29,15 +32,17 @@ export function PlaceholderPage({
     <div className="content-inner">
       <PageHeader
         title={labelForPage(page)}
-        subtitle={`路由 ${pathForPage(page)} · 功能迁移排期中`}
+        subtitle={`路由 ${pathForPage(page)} · ${
+          MIGRATED_PAGES.has(page) ? "已迁移" : "功能迁移排期中"
+        }`}
       />
       <Card>
         <div className="placeholder">
           <strong>该页面尚未迁移到新前端基础</strong>
           <span>原功能范围：{SCOPE[page]}</span>
           <span>
-            本轮交付「独立壳 + 待整理试点页」；其余页面按同一壳逐页迁移，
-            路由与导航行为已保持与迁移前一致。
+            本轮已迁移「对话」与「待整理」两页；其余 7 页仍为功能占位，
+            按同一壳逐页迁移，路由与导航行为已保持与迁移前一致。
           </span>
           <code>deepseek-harness / apps/web (B1 裁剪独立壳)</code>
           <div style={{ marginTop: 8 }}>

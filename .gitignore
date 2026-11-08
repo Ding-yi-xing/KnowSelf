@@ -1,5 +1,9 @@
 node_modules/
 dist/
+# tsc 声明输出单独目录，避免与 Vite build.outDir=dist 冲突（emptyOutDir）
+dist-types/
+# Vite 加载配置时生成的临时 bundle（Windows 下偶发残留，非源码）
+apps/web/vite.config.ts.timestamp-*.mjs
 build/
 target/
 coverage/

@@ -41,6 +41,12 @@ export { createTraceRepo } from "./repository/trace";
 export type { TraceRepo } from "./repository/trace";
 export { createStagingRepo } from "./repository/staging";
 export type { StagingRepo } from "./repository/staging";
+export { createReviewRequiredRepo } from "./repository/review-required";
+export type {
+  ReviewRequiredConversation,
+  ReviewRequiredRepo,
+} from "./repository/review-required";
+export { REVERTED_BATCH_GUARD } from "./repository/message-filter";
 export { createRelationshipsRepo } from "./repository/relationships";
 export type { RelationshipsRepo } from "./repository/relationships";
 export { createEventsRepo } from "./repository/events";
