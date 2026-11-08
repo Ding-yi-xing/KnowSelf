@@ -13,6 +13,10 @@ import { AppShell } from "./shell/AppShell";
 import { NAV_ITEMS, labelForPage, pageFromLocation, pathForPage, type PageId } from "./routes";
 import { InboxPage } from "./features/inbox/InboxPage";
 import { ChatPage } from "./features/chat/ChatPage";
+import { SystemPage } from "./features/system/SystemPage";
+import { TemplatesPage } from "./features/templates/TemplatesPage";
+import { CardsPage } from "./features/cards/CardsPage";
+import { JournalPage } from "./features/journal/JournalPage";
 import { PlaceholderPage } from "./features/placeholder/PlaceholderPage";
 import {
   ChatCommandContext,
@@ -146,6 +150,14 @@ export function App() {
           <ChatPage onNavigate={navigate} />
         ) : currentPage === "inbox" ? (
           <InboxPage />
+        ) : currentPage === "system" ? (
+          <SystemPage />
+        ) : currentPage === "templates" ? (
+          <TemplatesPage />
+        ) : currentPage === "cards" ? (
+          <CardsPage />
+        ) : currentPage === "journal" ? (
+          <JournalPage />
         ) : (
           <PlaceholderPage page={currentPage} onNavigate={navigate} />
         )}
