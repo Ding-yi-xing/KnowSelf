@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { htmlExtractor } from "../dist/extractors/html.js";
-import type { ExtractorContext } from "../dist/extractors/types.js";
+import { htmlExtractor } from "../src/extractors/html.js";
+import type { ExtractorContext } from "../src/extractors/types.js";
 
 const ctx: ExtractorContext = {
   mimeType: "text/html",

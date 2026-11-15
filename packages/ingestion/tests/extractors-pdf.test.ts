@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { pdfExtractor } from "../dist/extractors/pdf.js";
-import { ExtractorFailedError } from "../dist/errors.js";
-import type { ExtractorContext } from "../dist/extractors/types.js";
+import { pdfExtractor } from "../src/extractors/pdf.js";
+import { ExtractorFailedError } from "../src/errors.js";
+import type { ExtractorContext } from "../src/extractors/types.js";
 
 const ctx: ExtractorContext = {
   mimeType: "application/pdf",

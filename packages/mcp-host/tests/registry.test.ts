@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createToolRegistry } from "../dist/registry.js";
-import { toFullName } from "../dist/namespace.js";
-import type { ToolRegistry } from "../dist/registry.js";
+import { createToolRegistry } from "../src/registry.js";
+import { toFullName } from "../src/namespace.js";
+import type { ToolRegistry } from "../src/registry.js";
 import type { ToolResult } from "@knowself/contracts";
 
 function makeMockClient(sourceId: string) {

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { xlsxExtractor } from "../dist/extractors/xlsx.js";
-import { ExtractorFailedError } from "../dist/errors.js";
-import type { ExtractorContext } from "../dist/extractors/types.js";
+import { xlsxExtractor } from "../src/extractors/xlsx.js";
+import { ExtractorFailedError } from "../src/errors.js";
+import type { ExtractorContext } from "../src/extractors/types.js";
 import ExcelJS from "exceljs";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";

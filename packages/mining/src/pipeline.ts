@@ -256,6 +256,39 @@ function needsGraphRebuild(prev: GraphSnapshotRow, partial: CoOccurrenceResult):
   return false;
 }
 
+/**
+ * 图谱节点 label 的兜底。
+ *
+ * 为什么要兜底：person 行的 `display_name` 可能是空串（chat-ingest 对未识别发送者会写空），
+ * 而 `GraphSnapshotSchema` 的 label 是 `min(1)`——那是刻意的（空 label 上屏就是无名圈）。
+ * 所以**不放宽契约**，在生产侧给一个稳定名字。
+ *
+ * 为什么用 person_id 前 6 位而不是序号：序号随节点顺序变，刷新一次名字就变了。
+ *
+ * @param person 人物行（可能 label 为空）
+ * @returns 非空 label
+ */
+/**
+ * 把空字符串/纯空白归一成 `null`（供 `?? fallback` 使用）。
+ *
+ * 为什么需要：`?? ` 只挡 null/undefined，**挡不住空串**——这正是 W-9 真机那次
+ * `nodes[4].label` 为空的原因（会话标题是空串，`groupLabels.get() ?? id` 直接放行了 ""）。
+ *
+ * @param value 原始标签
+ * @returns 非空标签，或 null
+ */
+export function nonEmptyLabel(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+export function labelOf(person: { person_id: string; display_name: string }): string {
+  const name = person.display_name.trim();
+  if (name !== "") return name;
+  return `未命名(${person.person_id.slice(0, 6)})`;
+}
+
 export async function runMiningPipeline(input: RunMiningInput): Promise<RunMiningResult> {
   const store = input.store;
   const now = input.now ?? new Date().toISOString();
@@ -408,11 +441,41 @@ export async function runMiningPipeline(input: RunMiningInput): Promise<RunMinin
     )
     .map((person) => ({
       person_id: person.person_id,
-      label: person.display_name,
+      // label 兜底（W-9 真机实测）：有些 person 行 `display_name` 是空串（chat-ingest 对
+      // 未识别发送者会写空），而 `GraphSnapshotSchema` 要求 label ≥1 字符 —— 不放宽契约
+      // （空 label 上屏就是"无名圈"），在**生产侧**兜一个稳定可预期的名字。
+      // 用 person_id 前 6 位而不是序号：序号会随节点顺序变，刷新一次名字就变了。
+      label: labelOf(person),
     }));
+  /** W29：会话类型判定（@chatroom / @//chatroom/ 为群，其余为单聊）。 */
+  const conversationKindOf = (id: string): "group" | "direct" =>
+    id.endsWith("@chatroom") || id.includes("@//chatroom/") ? "group" : "direct";
+
+  /**
+   * W29 direct 节点 label：取会话内「非我且有归属」的消息发送者在 `persons` 里的真名；
+   * 取不到 / 空串 / 仍是 wxid_ 时兜 `单聊·<uid 末 4 位>`。每次挖掘重算，不做缓存。
+   * `MiningPipelineStore` 没有 aliases 面，故从消息行的 `sender_person_id` 反查 persons。
+   */
+  const directLabelOf = (conversationId: string): string => {
+    const uid = conversationId.slice(conversationId.indexOf(":") + 1);
+    const rows = messagesByConversation.get(conversationId) ?? [];
+    for (const row of rows) {
+      if (row.role === "me" || row.sender_person_id === null) continue;
+      const person = persons.find((candidate) => candidate.person_id === row.sender_person_id);
+      const name = person?.display_name?.trim() ?? "";
+      if (name !== "" && !/^wxid_/.test(name)) return name;
+    }
+    return `单聊·${uid.slice(-4)}`;
+  };
+
   const groupNodes = [...groupIds].sort().map((conversationId) => ({
     conversation_id: conversationId,
-    label: groupLabels.get(conversationId) ?? conversationId,
+    // 群节点同样要兜底：会话标题可能是空串（真机实测 `nodes[4].label` 就是空），
+    // 而 schema 要求 label ≥1 字符。空标题时退回 conversation_id（稳定、可读、不随顺序变）。
+    label:
+      conversationKindOf(conversationId) === "direct"
+        ? directLabelOf(conversationId)
+        : nonEmptyLabel(groupLabels.get(conversationId)) ?? conversationId,
   }));
   const timeFromTo = {
     ...(input.window?.from === undefined ? {} : { timeFrom: input.window.from }),
@@ -431,6 +494,7 @@ export async function runMiningPipeline(input: RunMiningInput): Promise<RunMinin
       messagesByConversation,
       groupConversationIds: groupIds,
       mentions: mentionInput,
+      conversationKindOf,
       now,
       ...timeFromTo,
     });
@@ -466,6 +530,7 @@ export async function runMiningPipeline(input: RunMiningInput): Promise<RunMinin
         messagesByConversation,
         groupConversationIds: groupIds,
         mentions: mentionInput,
+        conversationKindOf,
         now,
         ...timeFromTo,
       });

@@ -2,47 +2,53 @@
   "name": "knowself",
   "version": "0.0.0",
   "private": true,
-  "description": "本地优先的个人画像 + 决策辅助应用（MVP 网页版；V2 Tauri 桌面版）",
+  "description": "本地优先的个人画像 + 决策辅助应用（官方 dsh + Electron Desktop）",
   "engines": {
-    "node": ">=20.18 <21",
+    "node": ">=24 <25",
     "npm": ">=10"
   },
   "workspaces": [
-    "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm-run-all --parallel dev:server dev:web",
-    "dev:web": "npm --workspace @knowself/web run dev",
-    "dev:server": "npm --workspace @knowself/server run dev",
+    "dev": "npm run dev:dsh",
+    "dev:dsh": "pnpm --dir dsh/knowself run start:dsh",
     "build": "tsc -b",
     "typecheck": "tsc -b --emitDeclarationOnly",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "pretest": "node scripts/ensure-native.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "coverage:check": "node scripts/check-coverage.mjs",
-    "e2e": "playwright test",
-    "smoke": "node scripts/smoke.mjs",
-    "ingest:chat": "tsx apps/server/src/cli/ingest-chat.ts",
-    "ci": "npm run typecheck && npm run lint && npm run format:check && npm run test:coverage && npm run e2e"
+    "native:check": "node scripts/ensure-native.mjs",
+    "native:fix": "node scripts/ensure-native.mjs --fix",
+    "verify:dsh": "pnpm --dir dsh/knowself typecheck && pnpm --dir dsh/knowself test && pnpm --dir dsh/knowself run build:dsh && pnpm --dir dsh/knowself run build:package",
+    "verify:dsh:desktop": "npm run verify:dsh && node scripts/dsh-upgrade-check.mjs",
+    "verify:dsh:desktop:gui": "node scripts/verify-dsh-desktop-gui.mjs",
+    "verify:dsh:artifacts": "node scripts/check-dsh-artifact-consistency.mjs",
+    "ci:dsh": "npm run verify:dsh",
+    "ci": "npm run ci:dsh",
+    "person:rebuild": "tsx scripts/rebuild-persons.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
-    "@vercel/ncc": "^0.38.4",
     "@vitest/coverage-v8": "^1.6.0",
-    "@yao-pkg/pkg": "^6.14.2",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
-    "npm-run-all": "^4.1.5",
     "playwright": "^1.45.0",
     "prettier": "^3.3.0",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",
     "vitest": "^1.6.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "better-sqlite3-multiple-ciphers": "12.11.1"
+    }
   }
 }

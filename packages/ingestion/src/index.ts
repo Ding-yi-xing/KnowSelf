@@ -24,6 +24,7 @@ import {
   acceptProposal,
   editProposal,
   rejectProposal,
+  acceptSourceDistillProposal,
   listProposals,
   listProposalsByStatus,
   type ProposalDeps,
@@ -58,6 +59,9 @@ export interface Ingestion {
   runDistill(source: SourceStored, req: IngestRequest): Promise<IngestResponse>;
 
   acceptProposal(proposalId: ProposalId): IngestionProposal;
+
+  /** Accepts a source-distill review request and runs distillation. */
+  acceptSourceDistillProposal(proposalId: ProposalId): Promise<IngestionProposal>;
 
   editProposal(proposalId: ProposalId, body: string): IngestionProposal;
 
@@ -114,6 +118,10 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
 
     acceptProposal(id) {
       return acceptProposal(proposalDeps, id);
+    },
+
+    acceptSourceDistillProposal(id) {
+      return acceptSourceDistillProposal({ ...proposalDeps, ...distillDeps }, id);
     },
 
     editProposal(id, body) {
@@ -186,6 +194,10 @@ export {
 
 // MIME 工具
 export { inferMime, isSupportedMime } from "./mime";
+
+// 核心资料入口
+export { createSourceIntake } from "./intake";
+export type { SourceIntake, SourceIntakeDeps } from "./intake";
 
 // extractors
 export { pickExtractor, listExtractors } from "./extractors/index";

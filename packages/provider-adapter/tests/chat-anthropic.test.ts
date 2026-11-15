@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createAnthropicAdapter } from "../dist/adapter/anthropic.js";
+import { createAnthropicAdapter } from "../src/adapter/anthropic";
 
 const testConfig = {
   id: "test-anthropic",

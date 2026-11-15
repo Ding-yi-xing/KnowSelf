@@ -6,6 +6,7 @@ import { createSourcesRepo } from "./repository/sources";
 import { createProposalsRepo } from "./repository/proposals";
 import { createLinksRepo } from "./repository/links";
 import { createTemplatesRepo } from "./repository/templates";
+import { createWechatAssistRepo } from "./repository/wechat-assist";
 import { createEventBus } from "./events";
 import { dispatchWrite } from "./write";
 import { exportProfile, exportProfileBuffer } from "./export";
@@ -19,6 +20,7 @@ export interface ProfileStore {
   proposals: ReturnType<typeof createProposalsRepo>;
   links: ReturnType<typeof createLinksRepo>;
   templates: ReturnType<typeof createTemplatesRepo>;
+  wechatAssist: ReturnType<typeof createWechatAssistRepo>;
   events: ReturnType<typeof createEventBus>;
   write(req: WriteRequest, ctx: { callerKind: "ui" | "ingestion" }): void;
   transaction<T>(fn: () => T): T;
@@ -40,6 +42,7 @@ export function createProfileStore(opts: {
   const proposals = createProposalsRepo(db);
   const links = createLinksRepo(db);
   const templates = createTemplatesRepo(db);
+  const wechatAssist = createWechatAssistRepo(db);
   const events = createEventBus();
 
   return {
@@ -50,6 +53,7 @@ export function createProfileStore(opts: {
     proposals,
     links,
     templates,
+    wechatAssist,
     events,
     write(req: WriteRequest, ctx: { callerKind: "ui" | "ingestion" }): void {
       dispatchWrite(

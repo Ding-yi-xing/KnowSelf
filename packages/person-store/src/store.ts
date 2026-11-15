@@ -8,6 +8,7 @@
  */
 import { commitStaged, type CommitStagedInput, type CommitStagedResult } from "./commit";
 import { getPersonMeta, openPersonDb, type PersonDbOptions } from "./db";
+import type { DerivedCipherDb } from "./crypto/cipher";
 import {
   createPersonsEventBus,
   type PersonsChangeEvent,
@@ -26,6 +27,7 @@ import { createMessagesRepo, type MessagesRepo } from "./repository/messages";
 import { createMetricsRepo, type MetricsRepo } from "./repository/metrics";
 import { createPersonsRepo, type PersonsRepo } from "./repository/persons";
 import { createRelationshipsRepo, type RelationshipsRepo } from "./repository/relationships";
+import { createReplyHistoryRepo, type ReplyHistoryRepo } from "./repository/reply-history";
 import {
   createReviewRequiredRepo,
   type ReviewRequiredConversation,
@@ -49,6 +51,8 @@ export interface PersonStore {
   relationships: RelationshipsRepo;
   events: EventsRepo;
   metrics: MetricsRepo;
+  /** 仅供自动回复上下文使用的受限直聊读取面。 */
+  replyHistory: ReplyHistoryRepo;
   /** DESIGN-11 §7.5 能力 4 / DESIGN-13 §4.1；幂等，`created=false` 表示复用既有。 */
   ensurePersonForUid(input: EnsurePersonForUidInput): EnsurePersonForUidResult;
   /** DESIGN-11 §7.5 能力 5：单事务落档（§4.3 步骤 ①~⑦）；幂等。 */
@@ -73,6 +77,8 @@ export interface PersonStore {
   /** 单会话判据（供 UI 徽标「此前撤销 · 需重新确认」消费，零新增查询）。 */
   isReviewRequired(conversationId: string): boolean;
   transaction<T>(fn: () => T): T;
+  /** 受控打开加密回复派生库，不暴露 persons 根密钥。 */
+  openReplyRetrievalDb(dbPath: string, saltPath: string): DerivedCipherDb;
   close(): void;
 }
 
@@ -86,6 +92,7 @@ export function createPersonStore(opts: PersonStoreOptions): PersonStore {
   const relationships = createRelationshipsRepo(db);
   const events = createEventsRepo(db);
   const metrics = createMetricsRepo(db);
+  const replyHistory = createReplyHistoryRepo(db);
   const reviewRequired: ReviewRequiredRepo = createReviewRequiredRepo(db);
   const bus = createPersonsEventBus();
   const deps: IdentityDeps = {
@@ -109,6 +116,7 @@ export function createPersonStore(opts: PersonStoreOptions): PersonStore {
     relationships,
     events,
     metrics,
+    replyHistory,
     ensurePersonForUid: (input) => ensurePerson(deps, input),
     commitStaged(input: CommitStagedInput): CommitStagedResult {
       const result = db.transaction(() => commitStaged(commitDeps, input))();
@@ -141,6 +149,9 @@ export function createPersonStore(opts: PersonStoreOptions): PersonStore {
     isReviewRequired: (conversationId) => reviewRequired.isReviewRequired(conversationId),
     transaction<T>(fn: () => T): T {
       return db.transaction(fn)();
+    },
+    openReplyRetrievalDb(dbPath: string, saltPath: string): DerivedCipherDb {
+      return db.openReplyRetrievalDb(dbPath, saltPath);
     },
     close(): void {
       db.close();

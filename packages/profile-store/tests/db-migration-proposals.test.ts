@@ -1,6 +1,6 @@
 /**
- * 迁移测试：`ingestion_proposals.target_kind` 的 CHECK 从 3 值放宽到 4 值
- * （增加 `chat_message`，DESIGN-11 §7.2 #1 / V3 授权「加枚举值」）。
+ * Migration test: current four target/four status values upgrade to the
+ * source-distill target and processing status without losing schema data.
  *
  * 用 v-1 形态（`DDL_STATEMENTS` 仍是 3 值）建库 → `openProfileDb` 触发迁移 → 断言：
  * 行/列/索引/外键全部不变，且新值可写、非法值仍被拒、重复打开不重建。
@@ -25,15 +25,15 @@ function tmpDbPath(): string {
 }
 
 /**
- * V3 之前（v-1）的 `ingestion_proposals` 建表语句 + 索引。
- * 这里**故意手写旧形态**：`DDL_STATEMENTS` 已是新库终态（含 `chat_message`），
+ * The predecessor `ingestion_proposals` table and indexes.
+ * This deliberately hand-writes the old shape: `DDL_STATEMENTS` is the new terminal form,
  * 迁移测试必须自己造一个真正的旧库，不能靠现有 DDL。
  */
 const OLD_PROPOSALS_DDL = [
   `CREATE TABLE ingestion_proposals (
     id                      TEXT    PRIMARY KEY,
     source_id               TEXT    NOT NULL,
-    target_kind             TEXT    NOT NULL CHECK (target_kind IN ('core','card_section','journal')),
+    target_kind             TEXT    NOT NULL CHECK (target_kind IN ('core','card_section','journal','chat_message')),
     target_ref              TEXT    NOT NULL,
     proposed_body           TEXT    NOT NULL,
     reasoning               TEXT    NOT NULL DEFAULT '',
@@ -64,7 +64,7 @@ interface OldRow {
   decided_at: string | null;
 }
 
-/** 造一个「V3 之前」的库：OLD CHECK + 1 个 source + 3 条 proposal + 2 个索引。 */
+/** Creates the pre-source-distill database shape. */
 function buildV1Db(path: string): { rows: OldRow[]; rootpage: number } {
   const raw = new Database(path);
   raw.pragma("foreign_keys = OFF");
@@ -123,7 +123,8 @@ function buildV1Db(path: string): { rows: OldRow[]; rootpage: number } {
     .prepare("SELECT rootpage, sql FROM sqlite_master WHERE type='table' AND name='ingestion_proposals'")
     .get() as { rootpage: number; sql: string };
   // 前置条件：建库后仍是旧 CHECK（迁移由 openProfileDb 负责）
-  expect(meta.sql).not.toContain("'chat_message'");
+  expect(meta.sql).toContain("'chat_message'");
+  expect(meta.sql).not.toContain("'source_distill'");
   raw.close();
   return { rows, rootpage: meta.rootpage };
 }
@@ -150,8 +151,8 @@ afterEach(() => {
   }
 });
 
-describe("ensureProposalTargetKindConstraint（V3 加法式：加枚举值）", () => {
-  it("旧库升级：行/列/索引不变，CHECK 放宽到 4 值，foreign_key_check 为空，且确实重建过", () => {
+describe("ensureProposalConstraints", () => {
+  it("upgrades the current schema without losing rows, indexes, or foreign keys", () => {
     const path = tmpDbPath();
     const { rows, rootpage: rootpageBefore } = buildV1Db(path);
 
@@ -171,8 +172,10 @@ describe("ensureProposalTargetKindConstraint（V3 加法式：加枚举值）", 
       .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ingestion_proposals'")
       .get() as { sql: string };
     expect(fkSql.sql).toContain("'chat_message'");
+    expect(fkSql.sql).toContain("'source_distill'");
+    expect(fkSql.sql).toContain("'processing'");
     expect(fkSql.sql).toContain(
-      "IN ('core','card_section','journal','chat_message')",
+      "IN ('core','card_section','journal','chat_message','source_distill')",
     );
     // 旧库**必须**重建（与「新建库不重建」用例互为对照）
     const rootpageAfter = (
@@ -190,7 +193,8 @@ describe("ensureProposalTargetKindConstraint（V3 加法式：加枚举值）", 
       DDL_STATEMENTS.some(
         (sql) =>
           /CREATE TABLE IF NOT EXISTS ingestion_proposals\b/.test(sql) &&
-          sql.includes("'chat_message'"),
+          sql.includes("'source_distill'") &&
+          sql.includes("'processing'"),
       ),
     ).toBe(true);
 
@@ -232,6 +236,7 @@ describe("ensureProposalTargetKindConstraint（V3 加法式：加枚举值）", 
       )
       .get() as { sql: string; rootpage: number };
     expect(firstSchema.sql).toContain("'chat_message'");
+    expect(firstSchema.sql).toContain("'source_distill'");
     expect(firstSchema.sql).not.toContain("ingestion_proposals_new");
     firstOpen.raw.close();
 
@@ -245,7 +250,7 @@ describe("ensureProposalTargetKindConstraint（V3 加法式：加枚举值）", 
     secondOpen.raw.close();
   });
 
-  it("新约束生效：chat_message 可写，非法枚举仍被拒", () => {
+  it("new target and status values are writable while invalid values are rejected", () => {
     const path = tmpDbPath();
     buildV1Db(path);
     const db = openProfileDb(path);
@@ -257,14 +262,19 @@ describe("ensureProposalTargetKindConstraint（V3 加法式：加枚举值）", 
     );
     expect(() =>
       insert.run(
-        "proposal-chat",
+        "proposal-source-distill",
         SOURCE_ID,
-        "chat_message",
-        JSON.stringify({ kind: "chat_message", batch_id: "b1" }),
-        "chat body",
-        "chat-ingest:rule-v1",
+        "source_distill",
+        JSON.stringify({ kind: "source_distill", confidence: 0.4, classifier: "test", reason: "review" }),
+        "distill reviewed source",
+        "dsh-session-rule-v1",
         NOW,
       ),
+    ).not.toThrow();
+    expect(() =>
+      db.raw
+        .prepare("UPDATE ingestion_proposals SET status = 'processing' WHERE id = ?")
+        .run("proposal-source-distill"),
     ).not.toThrow();
     expect(() =>
       insert.run("proposal-bogus", SOURCE_ID, "bogus", "{}", "x", "p", NOW),
@@ -324,7 +334,7 @@ describe("ensureProposalTargetKindConstraint（V3 加法式：加枚举值）", 
       .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ingestion_proposals'")
       .get() as { sql: string };
     const after = verify.prepare("SELECT COUNT(*) AS n FROM ingestion_proposals").get() as { n: number };
-    expect(schema.sql).not.toContain("'chat_message'");
+    expect(schema.sql).not.toContain("'source_distill'");
     expect(after.n).toBe(before.n);
     verify.close();
   });

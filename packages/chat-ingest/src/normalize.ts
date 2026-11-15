@@ -86,11 +86,24 @@ export function normalizeConversation(
   raw.lines.forEach((line, index) => consumeLine(line, index + 1, state, compiled, patterns));
   finalize(state, compiled);
   const span = minMax(state.messages.map((message) => message.ts_ms));
+  /**
+   * 会话标题兜底（与 `resolveKey` 同风格，保持两者对称）。
+   *
+   * 为什么必须有：`title` 原来写的是 `header["title"] ?? ""` —— 导出里缺
+   * `# 显示名 : …` 那一行时直接给空串，于是群节点 label 变成 ""，
+   * 撞上 `GraphSnapshotSchema` 的 `min(1)` 会让**整个挖掘**失败
+   * （真机 `too_small path:["nodes",4,"label"]`）。`conversation_key` 一直有兜底、
+   * `title` 没有，这个不对称本身就是缺陷。
+   *
+   * 兜底值取 `conversation_key`（而不是再造一个"未命名群"）：它至少**可辨识**、
+   * 且跨导出稳定；至于"看起来不像名字"的观感问题，另立小项（见 ISS 待办）。
+   */
+  const headerTitle = (raw.header["title"] ?? "").trim();
   return {
     conversation_key: state.conversationKey,
     platform: spec.platform,
     kind: spec.conversation_kind[raw.header["kind"] ?? ""] ?? "direct",
-    title: raw.header["title"] ?? "",
+    title: headerTitle === "" ? state.conversationKey : headerTitle,
     first_ts_ms: span.min,
     last_ts_ms: span.max,
     messages: state.messages,

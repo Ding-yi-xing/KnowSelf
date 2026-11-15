@@ -73,7 +73,7 @@ const snapshot = {
 
 describe("mining 图谱契约", () => {
   it("GraphNodeKindSchema 取 3 值且拒绝自创值", () => {
-    expect(GraphNodeKindSchema.options).toEqual(["person", "group", "topic"]);
+    expect(GraphNodeKindSchema.options).toEqual(["person", "group", "topic", "direct"]);
     expect(GraphNodeKindSchema.safeParse("robot").success).toBe(false);
   });
 

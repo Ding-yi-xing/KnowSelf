@@ -71,8 +71,14 @@ export function saveSettings(rootDir: string, patch: PartialAppSettings): AppSet
   const storage = patch.storage
     ? { ...current.storage, ...pickDefined(patch.storage) }
     : current.storage;
+  const automation = patch.automation
+    ? { ...(current.automation ?? {}), ...pickDefined(patch.automation) }
+    : current.automation;
+  const autoArchive = patch.auto_archive
+    ? { ...(current.auto_archive ?? {}), ...pickDefined(patch.auto_archive) }
+    : current.auto_archive;
 
-  const merged: AppSettings = {
+  const merged = {
     schema_version: 1,
     app: app,
     conversation: conversation,
@@ -82,10 +88,13 @@ export function saveSettings(rootDir: string, patch: PartialAppSettings): AppSet
     tool_defaults: patch.tool_defaults ?? current.tool_defaults,
     retrieval: patch.retrieval ?? current.retrieval,
     storage: storage,
+    ...(automation === undefined ? {} : { automation }),
+    ...(autoArchive === undefined ? {} : { auto_archive: autoArchive }),
   };
 
+  let validated: AppSettings;
   try {
-    AppSettingsSchema.parse(merged);
+    validated = AppSettingsSchema.parse(merged);
   } catch (err) {
     if (err instanceof ZodError) {
       const first = err.issues[0];
@@ -97,13 +106,13 @@ export function saveSettings(rootDir: string, patch: PartialAppSettings): AppSet
     throw err;
   }
 
-  checkReferences(merged);
+  checkReferences(validated);
 
   const filePath = resolveSettingsPath(rootDir);
   const tmpPath = join(dirname(filePath), `.settings-${randomUUID()}.tmp`);
 
   try {
-    writeFileSync(tmpPath, JSON.stringify(merged, null, 2), "utf-8");
+    writeFileSync(tmpPath, JSON.stringify(validated, null, 2), "utf-8");
     renameSync(tmpPath, filePath);
   } catch (err) {
     try {
@@ -114,7 +123,7 @@ export function saveSettings(rootDir: string, patch: PartialAppSettings): AppSet
     throw new SettingsWriteError(`settings.json 写盘失败: ${String(err)}`, filePath);
   }
 
-  return merged;
+  return validated;
 }
 
 // ──────────────────────────────────────────────────

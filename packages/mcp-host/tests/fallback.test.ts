@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAntiCrawl } from "../dist/fallback.js";
+import { isAntiCrawl } from "../src/fallback.js";
 import type { FetchFallbackPolicy } from "@knowself/contracts";
 
 const basePolicy: FetchFallbackPolicy = {

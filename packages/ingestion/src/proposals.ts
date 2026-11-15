@@ -23,6 +23,7 @@ import type {
 } from "@knowself/contracts";
 import type { ProfileStore } from "@knowself/profile-store";
 import { ProposalNotPendingError, InvalidTargetRefError, ProposalNotFoundError } from "./errors";
+import { runDistill, type DistillDeps } from "./distill";
 
 /** proposals 操作依赖。 */
 export interface ProposalDeps {
@@ -41,6 +42,9 @@ export interface ProposalDeps {
   chatRejecter?: ChatMessageRejecter;
 }
 
+/** Dependencies needed to accept a source-distill review request. */
+export interface SourceDistillProposalDeps extends ProposalDeps, DistillDeps {}
+
 /**
  * 接受一条 proposal，将其内容写入 profile 并用 "assistant" 出处。
  * 同时写入 profile_sources 关联表。
@@ -51,6 +55,12 @@ export function acceptProposal(deps: ProposalDeps, proposalId: ProposalId): Inge
 
   if (proposal.status !== "pending") {
     throw new ProposalNotPendingError(proposalId, proposal.status);
+  }
+
+  if (proposal.target.kind === "source_distill") {
+    throw new InvalidTargetRefError(
+      "source_distill must be accepted through acceptSourceDistillProposal",
+    );
   }
 
   // ── 加法式分支：chat_message 走注入的提交器，不触碰 profile 写入链路（DESIGN-11 §7.2 #4）──
@@ -99,6 +109,10 @@ export function editProposal(
 
   if (proposal.status !== "pending") {
     throw new ProposalNotPendingError(proposalId, proposal.status);
+  }
+
+  if (proposal.target.kind === "source_distill") {
+    throw new InvalidTargetRefError("source_distill requests cannot be edited");
   }
 
   if (proposal.target.kind === "chat_message") {
@@ -165,6 +179,43 @@ export function rejectProposal(deps: ProposalDeps, proposalId: ProposalId): Inge
     refreshSourceStatusAfterDecision(deps.store, proposal.source_id, now());
     return deps.store.proposals.get(proposalId);
   });
+}
+
+/**
+ * Accepts a source-distill review request. A durable claim happens before the
+ * provider call so multiple UI windows cannot create duplicate model work.
+ */
+export async function acceptSourceDistillProposal(
+  deps: SourceDistillProposalDeps,
+  proposalId: ProposalId,
+): Promise<IngestionProposal> {
+  const now = deps.now ?? (() => new Date().toISOString());
+  const claimed = deps.store.proposals.claimSourceDistill(proposalId);
+  if (claimed === null) {
+    const current = getProposalOrThrow(deps.store, proposalId);
+    if (current.target.kind !== "source_distill") {
+      throw new InvalidTargetRefError("proposal is not a source_distill request");
+    }
+    throw new ProposalNotPendingError(proposalId, current.status);
+  }
+
+  try {
+    const source = deps.store.sources.get(claimed.source_id);
+    await runDistill(deps, source, {
+      provider_id: "",
+      focus_hints: [],
+      max_proposals: 8,
+      force: false,
+    });
+    const completed = deps.store.proposals.completeSourceDistill(proposalId, now());
+    if (completed === null) {
+      throw new ProposalNotPendingError(proposalId, "processing");
+    }
+    return completed;
+  } catch (cause) {
+    deps.store.proposals.releaseSourceDistill(proposalId);
+    throw cause;
+  }
 }
 
 /**
@@ -283,6 +334,7 @@ function resolveProfileId(target: IngestionProposal["target"]): string {
   if (target.kind === "card_section") return `card_section:${target.card_key}:${target.section}`;
   // chat_message — 不走 profile 写入链路（accept 前会命中 chat_message 分支，此处仅占位）
   if (target.kind === "chat_message") return `chat_message:${target.batch_id}`;
+  if (target.kind === "source_distill") return "source_distill";
   // journal — place date; actual record id is unknown until write completes
   return `journal_record:${target.date}`;
 }

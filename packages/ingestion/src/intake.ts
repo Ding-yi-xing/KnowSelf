@@ -31,6 +31,38 @@ export interface IntakeDeps {
 }
 
 /**
+ * 创建纯文本资料所需的最小依赖。
+ *
+ * Paste 不触及 MCP、Provider 或文件目录，因此可在完整摄入层降级时继续作为
+ * 本地资料持久化入口使用。
+ */
+export interface SourceIntakeDeps {
+  store: ProfileStore;
+  now?: () => string;
+}
+
+/** 不依赖模型和外部工具的窄资料入口。 */
+export interface SourceIntake {
+  createPasteSource(
+    req: Extract<CreateSourceRequest, { kind: "paste" }>,
+  ): Promise<SourceStored>;
+}
+
+/** 创建用于 paste 资料的核心本地入口。 */
+export function createSourceIntake(deps: SourceIntakeDeps): SourceIntake {
+  return {
+    createPasteSource(req) {
+      if (req.idempotency_key) {
+        const existing = deps.store.sources.findByIdempotencyKey(req.idempotency_key);
+        if (existing) return Promise.resolve(existing);
+      }
+      const now = deps.now ?? (() => new Date().toISOString());
+      return createFromPaste(deps, req, crypto.randomUUID(), now);
+    },
+  };
+}
+
+/**
  * 创建一条 source 记录。
  * file 分支接收 fileBytes；url 分支内部 fetch；paste 直接用 text。
  */
@@ -39,6 +71,10 @@ export async function createSource(
   req: CreateSourceRequest,
   fileBytes?: Buffer,
 ): Promise<SourceStored> {
+  if (req.idempotency_key) {
+    const existing = deps.store.sources.findByIdempotencyKey(req.idempotency_key);
+    if (existing) return existing;
+  }
   const now = deps.now ?? (() => new Date().toISOString());
   const sourceId = crypto.randomUUID();
 
@@ -81,6 +117,7 @@ async function createFromFile(
 
   const source: SourceStored = {
     id: sourceId,
+    ...(req.idempotency_key ? { idempotency_key: req.idempotency_key } : {}),
     kind: "file",
     original_name: req.original_name,
     mime_type: mime,
@@ -125,6 +162,7 @@ async function createFromUrl(
 
   const source: SourceStored = {
     id: sourceId,
+    ...(req.idempotency_key ? { idempotency_key: req.idempotency_key } : {}),
     kind: "url",
     original_name: urlBaseName,
     mime_type: mime as SupportedMimeType,
@@ -147,7 +185,7 @@ async function createFromUrl(
 }
 
 async function createFromPaste(
-  deps: IntakeDeps,
+  deps: SourceIntakeDeps,
   req: CreateSourceRequest & { kind: "paste" },
   sourceId: string,
   now: () => string,
@@ -164,6 +202,7 @@ async function createFromPaste(
 
   const source: SourceStored = {
     id: sourceId,
+    ...(req.idempotency_key ? { idempotency_key: req.idempotency_key } : {}),
     kind: "paste",
     original_name: name,
     mime_type: mime,

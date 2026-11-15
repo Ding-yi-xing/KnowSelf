@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { spawnAll, shutdownAll } from "../dist/lifecycle.js";
-import { createToolRegistry } from "../dist/registry.js";
-import { createStatusTracker } from "../dist/status.js";
+import { spawnAll, shutdownAll } from "../src/lifecycle.js";
+import { createToolRegistry } from "../src/registry.js";
+import { createStatusTracker } from "../src/status.js";
 import type { McpServerConfig } from "@knowself/contracts";
 
 function makeConfig(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
@@ -27,7 +27,7 @@ function makeConfig(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
 }
 
 // Mock createClient via module-level interception
-vi.mock("../dist/client/index.js", () => ({
+vi.mock("../src/client/index.js", () => ({
   createClient: vi.fn(),
 }));
 
@@ -37,7 +37,7 @@ describe("spawnAll", () => {
   });
 
   it("sets server state to healthy on successful spawn", async () => {
-    const { createClient } = await import("../dist/client/index.js");
+    const { createClient } = await import("../src/client/index.js");
     const mockClient = {
       sourceId: "test-server",
       listTools: vi.fn().mockResolvedValue([]),
@@ -58,7 +58,7 @@ describe("spawnAll", () => {
   });
 
   it("sets server state to dead on spawn failure without blocking other servers", async () => {
-    const { createClient } = await import("../dist/client/index.js");
+    const { createClient } = await import("../src/client/index.js");
     const mockGood = {
       sourceId: "good",
       listTools: vi.fn().mockResolvedValue([]),
@@ -98,7 +98,7 @@ describe("spawnAll", () => {
   });
 
   it("registers tools from spawned client into registry", async () => {
-    const { createClient } = await import("../dist/client/index.js");
+    const { createClient } = await import("../src/client/index.js");
     const mockClient = {
       sourceId: "tool-server",
       listTools: vi.fn().mockResolvedValue([

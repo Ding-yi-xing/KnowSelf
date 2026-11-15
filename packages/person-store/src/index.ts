@@ -17,12 +17,24 @@ export { DDL_STATEMENTS } from "./ddl.js";
 export { COLUMN_MIGRATIONS, META_DEFAULTS, POST_MIGRATION_DDL } from "./ddl/migrations";
 export type { ColumnMigration } from "./ddl/migrations";
 
-export { applyKey, verifyKey, rekey } from "./crypto/cipher";
-export type { CipherDbRaw } from "./crypto/cipher";
+export {
+  applyKey,
+  verifyKey,
+  rekey,
+  deriveReplyRetrievalKey,
+  ensureReplyRetrievalSalt,
+  openDerivedCipherDb,
+  REPLY_RETRIEVAL_INFO,
+  REPLY_RETRIEVAL_SALT_BYTES,
+  REPLY_RETRIEVAL_KEY_BYTES,
+} from "./crypto/cipher";
+export type { CipherDbRaw, DerivedCipherDb } from "./crypto/cipher";
 
 export { parseJsonColumn, stringifyJsonColumn } from "./json";
 
 export { createPersonStore } from "./store";
+export { mergePersons, MergeRejectedError } from "./merge";
+export type { MergePersonsInput, MergePersonsResult } from "./merge";
 export type { PersonStore, PersonStoreOptions } from "./store";
 
 export { createPersonsRepo } from "./repository/persons";
@@ -53,6 +65,13 @@ export { createEventsRepo } from "./repository/events";
 export type { EventsRepo } from "./repository/events";
 export { createMetricsRepo } from "./repository/metrics";
 export type { MetricsRepo } from "./repository/metrics";
+export { createReplyHistoryRepo } from "./repository/reply-history";
+export type {
+  ReplyConversationRow,
+  ReplyHistoryMessage,
+  ReplyHistoryPage,
+  ReplyHistoryRepo,
+} from "./repository/reply-history";
 
 export { commitStaged } from "./commit";
 export type { CommitDeps, CommitStagedInput, CommitStagedResult } from "./commit";

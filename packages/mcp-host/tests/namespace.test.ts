@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toFullName, fromFullName, ensureSourceId } from "../dist/namespace.js";
+import { toFullName, fromFullName, ensureSourceId } from "../src/namespace.js";
 
 describe("toFullName", () => {
   it("combines sourceId and bareName with __ separator", () => {

@@ -3,6 +3,7 @@ import {
   ProposalTargetKindSchema,
   ProposalTargetSchema,
   ProposalTargetChatMessageSchema,
+  ProposalTargetSourceDistillSchema,
 } from "../src/source";
 import { DocSourceTypeSchema, RetrieveQuerySchema, RetrieverConfigSchema } from "../src/retrieval";
 import { ChatOptionsSchema } from "../src/provider";
@@ -23,12 +24,13 @@ describe("source.ts — ProposalTargetChatMessage（DESIGN-11 §7.2 #1/#2）", (
     tier: "auto",
   };
 
-  it("ProposalTargetKindSchema 增 'chat_message'（3 → 4 值）", () => {
+  it("ProposalTargetKindSchema includes source_distill", () => {
     expect(ProposalTargetKindSchema.options).toEqual([
       "core",
       "card_section",
       "journal",
       "chat_message",
+      "source_distill",
     ]);
   });
 
@@ -42,7 +44,7 @@ describe("source.ts — ProposalTargetChatMessage（DESIGN-11 §7.2 #1/#2）", (
     );
   });
 
-  it("ProposalTargetSchema（discriminatedUnion）接受 4 个分支且既有 3 分支不变", () => {
+  it("ProposalTargetSchema accepts source_distill alongside content targets", () => {
     expect(ProposalTargetSchema.parse(target).kind).toBe("chat_message");
     expect(ProposalTargetSchema.parse({ kind: "core" }).kind).toBe("core");
     expect(ProposalTargetSchema.parse({ kind: "journal", date: "2026-09-09" }).kind).toBe(
@@ -52,6 +54,14 @@ describe("source.ts — ProposalTargetChatMessage（DESIGN-11 §7.2 #1/#2）", (
       ProposalTargetSchema.parse({ kind: "card_section", card_key: "identity", section: "bio" })
         .kind,
     ).toBe("card_section");
+    expect(
+      ProposalTargetSourceDistillSchema.parse({
+        kind: "source_distill",
+        confidence: 0.4,
+        classifier: "dsh-session-rule-v1",
+        reason: "review before distilling",
+      }).kind,
+    ).toBe("source_distill");
   });
 });
 
@@ -141,6 +151,14 @@ describe("settings.ts — Automation 增量（D17 §2.2 M-7）", () => {
     expect(a.dry_run).toBe(true);
     expect(a.tick_ms).toBe(60_000);
     expect(a.tasks).toEqual([]);
+    expect(a.wechat_assist).toEqual({
+      enabled: false,
+      send_enabled: false,
+      drafts_only: true,
+      allowlist: [],
+      max_messages_per_hour: 6,
+      cooldown_ms: 300_000,
+    });
     expect(a.report_push_dir).toBe("");
     expect(a.notify).toEqual({ badge: true, os_notification: false });
   });

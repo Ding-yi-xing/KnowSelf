@@ -19,7 +19,7 @@ function capture(fn: () => unknown): unknown {
 
 describe("defaultPersonsKeyPath", () => {
   it("joins %APPDATA%/knowSelf/keys/persons.key (DESIGN-13 §7.2)", async () => {
-    const { defaultPersonsKeyPath } = await import("../dist/keys.js");
+    const { defaultPersonsKeyPath } = await import("../src/keys.js");
     expect(defaultPersonsKeyPath("C:\\AppData\\Roaming")).toBe(
       join("C:\\AppData\\Roaming", "knowSelf", "keys", "persons.key"),
     );
@@ -38,7 +38,7 @@ describe("resolvePersonsKey", () => {
   });
 
   it("prefers the env var over the key file (ENV > 文件)", async () => {
-    const { resolvePersonsKey, KEY_ENV_VAR } = await import("../dist/keys.js");
+    const { resolvePersonsKey, KEY_ENV_VAR } = await import("../src/keys.js");
     const keyPath = join(tmpDir, "persons.key");
     // 文件内容非法：若优先级错误就会抛 EncryptionKeyInvalidError
     writeFileSync(keyPath, SYNTHETIC_SHORT_B64, "utf-8");
@@ -50,7 +50,7 @@ describe("resolvePersonsKey", () => {
   });
 
   it("falls back to the key file when the env var is absent", async () => {
-    const { resolvePersonsKey } = await import("../dist/keys.js");
+    const { resolvePersonsKey } = await import("../src/keys.js");
     const keyPath = join(tmpDir, "persons.key");
     writeFileSync(keyPath, `${SYNTHETIC_KEY_B64}\n`, "utf-8");
 
@@ -60,7 +60,7 @@ describe("resolvePersonsKey", () => {
   });
 
   it("treats a blank env var as unset and falls back to the file", async () => {
-    const { resolvePersonsKey, KEY_ENV_VAR } = await import("../dist/keys.js");
+    const { resolvePersonsKey, KEY_ENV_VAR } = await import("../src/keys.js");
     const keyPath = join(tmpDir, "persons.key");
     writeFileSync(keyPath, SYNTHETIC_KEY_B64, "utf-8");
 
@@ -70,8 +70,8 @@ describe("resolvePersonsKey", () => {
   });
 
   it("throws ENCRYPTION_KEY_MISSING when no carrier exists", async () => {
-    const { resolvePersonsKey } = await import("../dist/keys.js");
-    const { EncryptionKeyMissingError } = await import("../dist/errors.js");
+    const { resolvePersonsKey } = await import("../src/keys.js");
+    const { EncryptionKeyMissingError } = await import("../src/errors.js");
     const keyPath = join(tmpDir, "missing.key");
 
     const err = capture(() => resolvePersonsKey({ env: {}, keyPath }));
@@ -82,8 +82,8 @@ describe("resolvePersonsKey", () => {
   });
 
   it("throws ENCRYPTION_KEY_INVALID for a non-base64 env value without echoing it", async () => {
-    const { resolvePersonsKey, KEY_ENV_VAR } = await import("../dist/keys.js");
-    const { EncryptionKeyInvalidError } = await import("../dist/errors.js");
+    const { resolvePersonsKey, KEY_ENV_VAR } = await import("../src/keys.js");
+    const { EncryptionKeyInvalidError } = await import("../src/errors.js");
 
     const err = capture(() => resolvePersonsKey({ env: { [KEY_ENV_VAR]: SYNTHETIC_NOT_B64 } }));
 
@@ -96,8 +96,8 @@ describe("resolvePersonsKey", () => {
   });
 
   it("throws ENCRYPTION_KEY_INVALID when the decoded length is not 32 bytes", async () => {
-    const { resolvePersonsKey } = await import("../dist/keys.js");
-    const { EncryptionKeyInvalidError } = await import("../dist/errors.js");
+    const { resolvePersonsKey } = await import("../src/keys.js");
+    const { EncryptionKeyInvalidError } = await import("../src/errors.js");
     const keyPath = join(tmpDir, "short.key");
     writeFileSync(keyPath, SYNTHETIC_SHORT_B64, "utf-8");
 

@@ -342,3 +342,25 @@ export type ListConversationsQuery = z.infer<typeof ListConversationsQuerySchema
 export type ListConversationsResponse = z.infer<typeof ListConversationsResponseSchema>;
 export type GetConversationResponse = z.infer<typeof GetConversationResponseSchema>;
 export type RenameConversationRequest = z.infer<typeof RenameConversationRequestSchema>;
+
+// ──────────────────────────────────────────────────────────────────────────
+//  W-34-T02：聊天记录**导入平台**
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * 聊天记录**导入平台**（W-34-T02）。
+ *
+ * 与 `person.ts` 的 `AliasPlatformSchema` **不是一回事**，两者不得互相复用：
+ *   - 本 schema 描述「这份导出产物由哪个客户端产生、该用哪个解析器读」；
+ *     值域只放**真的有解析器**的平台；
+ *   - `AliasPlatformSchema` 是**别名命名空间**（wechat / qq / telegram / discord / other），
+ *     含 telegram / discord 这类永远不会出现在导入链路上的值。
+ * 合并二者会造出「接口声称支持 telegram 导入、实际根本没有解析器」这种谎。
+ *
+ * 新增枚举值的前提：先落地对应 reader/parser，再加值。加值当天必须同步
+ * `dsh/knowself/src/routes/chat-import.ts` 的平台闸——
+ * 当前 QQ / 抖音一律 400 `PLATFORM_NOT_SUPPORTED`。
+ */
+export const ChatPlatformSchema = z.enum(["wechat", "qq", "douyin"]);
+
+export type ChatPlatform = z.infer<typeof ChatPlatformSchema>;

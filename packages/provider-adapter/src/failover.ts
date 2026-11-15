@@ -36,6 +36,9 @@ export function transitionOnSuccess(
     latency_p50_ms: updateLatency(prev.latency_p50_ms, latencyMs),
     consecutive_failures: 0,
     last_error: null,
+    // 成功即清空上次失败码，避免面板上「已恢复」却还挂着 AUTH_FAILED（W-7/C）
+    last_error_code: null,
+    last_error_retryable: null,
     last_checked_at: now,
     reactivate_at: null,
   };
@@ -60,6 +63,10 @@ export function transitionOnFailure(
     state,
     consecutive_failures: failures,
     last_error: error.message.slice(0, 512),
+    // W-7/C：错误码与可重试性必须一起落到健康对象上，否则健康面板只能看到
+    // 一段自由文本，分不清「被限流」和「key 失效」。
+    last_error_code: error.code,
+    last_error_retryable: error.retryable,
     last_checked_at: now,
     reactivate_at:
       state === "dead" ? new Date(Date.now() + DEAD_COOLDOWN_MS).toISOString() : prev.reactivate_at,

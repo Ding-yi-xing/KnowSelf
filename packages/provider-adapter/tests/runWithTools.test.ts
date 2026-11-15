@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createProviderAdapter } from "../dist/index.js";
+import { createProviderAdapter } from "../src/index";
 import type { ChatChunk, ProviderMessage, ProviderConfig } from "@knowself/contracts";
 import type { ToolRegistry } from "@knowself/mcp-host";
 

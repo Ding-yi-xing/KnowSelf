@@ -11,6 +11,7 @@ import { parseJsonColumn } from "../json";
 
 interface SourceRow {
   id: string;
+  idempotency_key: string | null;
   kind: string;
   original_name: string;
   mime_type: string;
@@ -31,6 +32,7 @@ interface SourceRow {
 function rowToStored(row: SourceRow): SourceStored {
   return {
     id: row.id,
+    ...(row.idempotency_key ? { idempotency_key: row.idempotency_key } : {}),
     kind: row.kind as SourceStored["kind"],
     original_name: row.original_name,
     mime_type: row.mime_type as SourceStored["mime_type"],
@@ -89,15 +91,23 @@ export function createSourcesRepo(db: ProfileDb) {
       return rowToStored(row);
     },
 
+    findByIdempotencyKey(key: string): SourceStored | undefined {
+      const row = db
+        .prepare("SELECT * FROM sources WHERE idempotency_key = ?")
+        .get(key) as SourceRow | undefined;
+      return row ? rowToStored(row) : undefined;
+    },
+
     insert(s: SourceStored): void {
       db.prepare(
         `INSERT INTO sources
-         (id, kind, original_name, mime_type, file_path, url,
+         (id, idempotency_key, kind, original_name, mime_type, file_path, url,
           extracted_text, truncated, char_count, user_note, user_tags,
           status, metadata, created_at, last_ingested_at, last_error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         s.id,
+        s.idempotency_key ?? null,
         s.kind,
         s.original_name,
         s.mime_type,
@@ -149,6 +159,14 @@ export function createSourcesRepo(db: ProfileDb) {
         .prepare("SELECT MAX(last_ingested_at) AS latest FROM sources")
         .get() as { latest: string | null };
       return row.latest;
+    },
+
+    /**
+     * 改名（W-3 CRUD）：只改展示用的 `original_name`，不动内容与状态。
+     * 空串不合法由路由层拦（此处不做业务校验，保持仓储「只做 SQL」的纪律）。
+     */
+    rename(id: SourceId, name: string): void {
+      db.prepare("UPDATE sources SET original_name = ? WHERE id = ?").run(name, id);
     },
 
     updateNote(id: SourceId, note: string, tags: string[]): void {

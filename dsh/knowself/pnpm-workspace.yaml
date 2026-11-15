@@ -1,0 +1,36 @@
+# 插件工程（dsh/knowself）是**独立的 pnpm workspace 根**：`.` = 插件自身，`../../packages/*` = 仓库包。
+#
+# pnpm 11 的项目设置必须声明在本文件。`package.json.pnpm` 和项目 `.npmrc`
+# 中的同类设置都会被忽略；这会让 workspace overrides 或原生模块的构建许可失效。
+packages:
+  - '.'
+  - '../../packages/*'
+
+engineStrict: false
+autoInstallPeers: false
+linkWorkspacePackages: true
+preferWorkspacePackages: true
+
+# 仓库包一律走本地 workspace，绝不去 registry 拉（这些包从来没发布过）
+overrides:
+  '@knowself/chat-ingest': 'workspace:*'
+  '@knowself/config': 'workspace:*'
+  '@knowself/context-router': 'workspace:*'
+  '@knowself/contracts': 'workspace:*'
+  '@knowself/ingestion': 'workspace:*'
+  '@knowself/mcp-host': 'workspace:*'
+  '@knowself/mining': 'workspace:*'
+  '@knowself/person-store': 'workspace:*'
+  '@knowself/profile-store': 'workspace:*'
+  '@knowself/provider-adapter': 'workspace:*'
+  '@knowself/sync-provider': 'workspace:*'
+  # P0（ISS-009 更正）：加密驱动**只允许一个大版本**。
+  # 同进程里出现 11.x 与 12.x 两份时磁盘格式互不兼容：
+  # 宿主（12.11.1）能开的 persons.sqlite，仓库侧（11.10.0）会报 `file is not a database`。
+  better-sqlite3-multiple-ciphers: '12.11.1'
+
+# 仅允许这三个可审计的安装构建脚本；其他依赖保持 pnpm 11 的默认拒绝策略。
+allowBuilds:
+  esbuild: true
+  better-sqlite3: true
+  better-sqlite3-multiple-ciphers: true

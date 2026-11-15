@@ -19,8 +19,8 @@
 import { z } from "zod";
 import { IsoTimestampSchema } from "./profile";
 
-/** 节点类型：人物 / 群会话 / 话题。 */
-export const GraphNodeKindSchema = z.enum(["person", "group", "topic"]);
+/** 节点类型：人物 / 群会话 / 话题 / 单聊会话（W29 末位追加 direct）。 */
+export const GraphNodeKindSchema = z.enum(["person", "group", "topic", "direct"]);
 
 /** 边类型（DESIGN-12 §8.3 定稿 6 值，不得自创）。 */
 export const GraphEdgeKindSchema = z.enum([
@@ -133,6 +133,13 @@ export const GraphSnapshotStatsSchema = z.object({
   community_count: z.number().int().min(0),
   modularity: z.number(),
   degraded_sessions: z.number().int().min(0),
+  /**
+   * 裁剪**前**的候选边数（批次 A1）。缺省 = 未裁剪/未知。
+   *
+   * 为什么必须暴露：`edge_count` 顶到上限（10000）时用户会以为看到了全部边，
+   * 真机全量那次候选 18k+、保留 10k、`warnings` 却为空 —— 典型的"看起来对"。
+   */
+  edge_candidates: z.number().int().min(0).optional(),
 });
 
 /**

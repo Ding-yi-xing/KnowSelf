@@ -105,3 +105,62 @@ describe("normalizeConversation（纯函数，DESIGN-11 §3.4 / §4.1）", () =>
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
   });
 });
+
+/**
+ * C2 上游修复（W-9 整洁项）：两处「空串」不再放行。
+ *
+ * 背景：这两个空串是**下游**兜底的起因（`labelOf` / `nonEmptyLabel`），
+ * 修在这里才是"能处理"，而不是"看不见但没炸"。
+ */
+describe("normalizeConversation · 空发送者名 / 空会话标题（C2）", () => {
+  /** 有 `# 会话对象`、但**没有** `# 显示名`，且消息行 `[hh:mm] : 正文` 没有名字。 */
+  const NO_NAME_NO_TITLE = [
+    "# 会话对象 : 12345678901@chatroom",
+    "# 类型     : 群聊",
+    "#",
+    "---------- 2024-05-06 ----------",
+    "[2024-05-06 09:00] : 没有发送者名字的一行",
+    "[09:01] 王五: 正常一行",
+  ].join("\n");
+
+  it("空发送者名 → 改写成描述符既有的 unknown_sender 形态（不再是空串）", () => {
+    const result = normalizeConversation(rawOf(NO_NAME_NO_TITLE), compiled);
+    const blank = result.messages.find((m) => m.content.includes("没有发送者名字"));
+    expect(blank).toBeDefined();
+    // 关键：不是 ""，而是 `未知(sender=)`；下游 persons.display_name 因此非空
+    expect(blank?.sender_name).toBe("未知(sender=)");
+    expect(blank?.sender_name.trim()).not.toBe("");
+    expect(blank?.sender_id).toBe("name:未知(sender=)");
+    // role 仍是 other（不是 self，也不是 system）
+    expect(blank?.role).toBe("other");
+  });
+
+  it("空发送者名 → 同时登记 SENDER_UNKNOWN issue（能处理，也看得见）", () => {
+    const result = normalizeConversation(rawOf(NO_NAME_NO_TITLE), compiled);
+    const unknown = result.issues.filter((issue) => issue.code === "SENDER_UNKNOWN");
+    expect(unknown).toHaveLength(1);
+    // 指到那一行（第 5 行：头部 3 行 + # + 日期分隔）
+    expect(unknown[0]?.line_no).toBe(5);
+    expect(unknown[0]?.excerpt).toContain("未知(sender=)");
+  });
+
+  it("缺 `# 显示名` → title 兜底成 conversation_key（不再是空串）", () => {
+    const result = normalizeConversation(rawOf(NO_NAME_NO_TITLE), compiled);
+    expect(result.conversation_key).toBe("12345678901@chatroom");
+    expect(result.title).toBe("12345678901@chatroom");
+    expect(result.title.trim()).not.toBe("");
+  });
+
+  it("有 `# 显示名` 时照常使用（兜底不得覆盖真实标题），且 title 去首尾空白", () => {
+    const text = [
+      "# 会话对象 : wxid_aaaaaaaaaaaa22",
+      "# 显示名   :   老同学群   ",
+      "# 类型     : 群聊",
+      "#",
+      "---------- 2024-05-06 ----------",
+      "[2024-05-06 09:00] 王五: 正常一行",
+    ].join("\n");
+    const result = normalizeConversation(rawOf(text), compiled);
+    expect(result.title).toBe("老同学群");
+  });
+});

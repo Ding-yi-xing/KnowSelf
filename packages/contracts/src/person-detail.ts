@@ -5,7 +5,7 @@
  * 拆文件理由：DESIGN-19 §3.4 的 DTO 并入 person.ts 会突破「单文件 ≤200 行」硬约束。
  *
  * 时间戳口径（DESIGN-19 §3.2）：DTO 一律 `*_ts_ms`（epoch 毫秒）；
- * DB 的 ISO8601 由 chat-engine 路由层转换，**apps/web 不做日期解析**。
+ * 时间字段遵循当前契约；宿主 UI 不得重复解析或改写其语义。
  *
  * 本文件**只收录字段可逐字回溯**到设计文档的 DTO：
  *   PersonDetailSchema          DESIGN-19 §3.4 代码块（逐字照抄）

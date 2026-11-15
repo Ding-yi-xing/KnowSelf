@@ -105,7 +105,38 @@ export function getGraphSnapshot(
     return null;
   }
   const snapshot = GraphSnapshotSchema.parse(JSON.parse(row.payload_json));
-  return { snapshot: applyGraphFilters(snapshot, q), warnings: [] };
+  const filtered = applyGraphFilters(snapshot, q);
+  return { snapshot: filtered, warnings: deriveSnapshotWarnings(snapshot, filtered) };
+}
+
+/**
+ * 从快照本身**推导**告警（而不是依赖流水线运行期的瞬时 warnings）。
+ *
+ * 为什么必须推导：`warnings` 是挖掘那一刻的审计码，**不落库**（schema strict，见 §8.2）。
+ * 读路径上如果只返回空数组，用户看到 `edges=10000` 就以为是全部——
+ * 真机全量就是这样：候选 24,269、保留 10,000，读接口 `warnings: []`，完全静默。
+ *
+ * 判据完全来自快照里的数字（`stats.edge_candidates` vs `edges.length`），
+ * 所以**不需要重跑挖掘**也能对历史快照生效。
+ *
+ * @param raw 落库的完整快照
+ * @param filtered 过滤后的快照（`edge_kinds` / `min_interaction` 会再砍一刀）
+ * @returns 告警码数组（可为空）
+ */
+function deriveSnapshotWarnings(
+  raw: { stats: { edge_candidates?: number | undefined }; edges: readonly unknown[] },
+  filtered: { edges: readonly unknown[] },
+): string[] {
+  const warnings: string[] = [];
+  const candidates = raw.stats?.edge_candidates;
+  if (candidates !== undefined && candidates > raw.edges.length) {
+    warnings.push(`GRAPH_EDGES_TRUNCATED:candidate=${candidates} kept=${raw.edges.length}`);
+  }
+  if (filtered.edges.length < raw.edges.length) {
+    // 前端筛选（edge_kinds / min_interaction）也会让边变少，同样要说清楚
+    warnings.push(`GRAPH_EDGES_FILTERED:kept=${raw.edges.length} shown=${filtered.edges.length}`);
+  }
+  return warnings;
 }
 
 /** §4.6「最新快照」约定：`ORDER BY computed_at DESC LIMIT 1`（TEXT 排序，与 DDL 同语义）。 */

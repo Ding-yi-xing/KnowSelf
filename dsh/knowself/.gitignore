@@ -1,0 +1,5 @@
+# Generated and exploratory artifacts; source, tests, scripts and lockfile stay tracked.
+.probe/
+.skel/
+*.tsbuildinfo
+*.timestamp-*.mjs

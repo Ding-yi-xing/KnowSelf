@@ -206,7 +206,7 @@ export async function buildFullIndex(
 
   // Embedding 写入
   if (deps.embedFn) {
-    const modelId = deps.config.embed_model_id ?? "Xenova/bge-small-zh-v1.5";
+    const modelId = deps.config.embed_model_id ?? "qwen3-embedding:0.6b";
     const rows = deps.db
       .prepare(
         "SELECT id, child_text FROM chunks WHERE id NOT IN (SELECT chunk_id FROM embeddings)",
@@ -288,7 +288,7 @@ export async function applyChange(deps: BuilderDeps, event: ProfileChangeEvent):
   })();
 
   if (deps.embedFn && event.kind !== "delete") {
-    const modelId = deps.config.embed_model_id ?? "Xenova/bge-small-zh-v1.5";
+    const modelId = deps.config.embed_model_id ?? "qwen3-embedding:0.6b";
     const newRows = deps.db
       .prepare(
         "SELECT id, child_text FROM chunks WHERE doc_ref = ? AND id NOT IN (SELECT chunk_id FROM embeddings)",

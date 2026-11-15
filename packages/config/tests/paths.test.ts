@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getDataPaths, ensureDataDirs } from "../dist/paths.js";
+import { getDataPaths, ensureDataDirs } from "../src/paths.js";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

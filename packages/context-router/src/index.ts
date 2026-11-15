@@ -19,7 +19,8 @@ import type {
 } from "@knowself/contracts";
 import type { ProfileStore } from "@knowself/profile-store";
 import type { ProviderAdapter } from "@knowself/provider-adapter";
-import { openRetrievalDb, type RetrievalDb, EMBEDDING_DIM } from "./db";
+import { openRetrievalDb, type RetrievalDb, EMBEDDING_DIM, openReplyRetrievalDbFromHandle, type ReplyRetrievalDb } from "./db";
+import { createReplyRetrievalIndex, type ReplyRetrievalIndex } from "./reply-retrieval";
 import { loadEmbeddingPipeline, type EmbedFn } from "./embedding";
 import { buildContext } from "./build";
 import { buildFullIndex, applyChange } from "./index-builder";
@@ -45,6 +46,9 @@ export interface ContextRouter {
 
   /** 重建聊天原文索引（需创建时注入 `chatSource`；未注入则抛错）。 */
   buildChatIndex(opts?: { conversationIds?: readonly string[] }): Promise<ChatIndexResult>;
+
+  /** 返回已经由 person-store 解锁的加密回复索引；未注入时返回 undefined。 */
+  replyRetrieval?: ReplyRetrievalIndex;
 
   /** 关闭数据库连接，释放资源。 */
   shutdown(): void;
@@ -96,10 +100,14 @@ interface CreateRouterOpts {
   embeddingBaseUrl?: string;
   /** 聊天索引数据源（通常是 person-store 门面）；不传则 buildChatIndex 抛错。 */
   chatStore?: ChatStoreLike;
+  replyRetrievalDb?: ReplyRetrievalDb;
 }
 
 export function createContextRouter(opts: CreateRouterOpts): ContextRouter {
   const db: RetrievalDb = openRetrievalDb(opts.dbPath);
+  const replyRetrieval = opts.replyRetrievalDb === undefined
+    ? undefined
+    : createReplyRetrievalIndex(openReplyRetrievalDbFromHandle(opts.replyRetrievalDb));
   let embedFn: EmbedFn | null = null;
   let _embedInit = false;
   let _embedError: Error | null = null;
@@ -167,8 +175,11 @@ export function createContextRouter(opts: CreateRouterOpts): ContextRouter {
       );
     },
 
+    ...(replyRetrieval === undefined ? {} : { replyRetrieval }),
+
     shutdown(): void {
       db.raw.close();
+      opts.replyRetrievalDb?.close();
     },
   };
 }

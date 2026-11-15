@@ -35,6 +35,22 @@ export interface PersonsRepo {
 
   // ── 写 ──
   insert(row: PersonInsert, now: string): PersonRow;
+  /**
+   * 新建一个**人工**人物（W-3 恢复 CRUD 的最小写入口）。
+   *
+   * 与 `insert` 的区别：`person_id` 由内部生成、`subject_kind` 固定 `'contact'`、
+   * `manual_locked=1`（人工建的人不该被自动写覆盖），`note` 落 `remark` 列。
+   *
+   * @param input.display_name 显示名（去空白后非空；调用方负责校验）
+   * @param input.note 备注（可选，落 `remark`）
+   * @param input.person_id 仅测试注入用；生产不传（内部 `randomUUID`）
+   * @param now ISO8601 时间
+   * @returns 写后行
+   */
+  createManualPerson(
+    input: { display_name: string; note?: string; person_id?: string },
+    now: string,
+  ): PersonRow;
   updateManual(personId: string, patch: PersonPatch, now: string): PersonRow;
   updateAutoStats(personId: string, stats: PersonStatsPatch, now: string): AutoWriteResult;
   updateProfileJson(
@@ -55,6 +71,11 @@ export interface PersonsRepo {
 
   // ── 重建 ──
   recomputeStats(personId: string, now: string): PersonRow;
+  /**
+   * 批量重算派生统计（一条 GROUP BY + 事务批量 UPDATE）。
+   * 导入后调用一次，否则 UI 上的 `msg_count` 全是 0。
+   */
+  recomputeAllStats(now: string): { updated: number };
 }
 
 function mapPerson(row: PersonSqlRow): PersonRow {

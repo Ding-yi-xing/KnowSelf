@@ -4,8 +4,7 @@
  * 定位：**纯 TS 接口，非 Zod**（DESIGN-17 §2.1 C-1 明示）。
  *
  * 为什么放 contracts：若让 `ingestion` 直接调 `person-store`，会新增一条
- * 依赖矩阵（ARCHITECTURE §5）外的边。解法 = 接口放 contracts，实现在
- * chat-ingest，由 apps/server 依赖注入接线（DESIGN-11 §7.3）。
+ * 依赖矩阵外的边。接口放 contracts，由 chat-ingest 实现并由当前宿主装配。
  *
  * 工作单元：chat-ingest（实现） / ingestion（消费） / chat-engine（装配）
  *
@@ -23,6 +22,18 @@ export interface ChatMessageCommitTarget {
   /** 批次 ID（UUID v4）。 */
   batch_id: string;
   conversation_id: string;
+  /**
+   * 会话显示名（W-31 加法式字段）。
+   *
+   * 为什么必须随 target 走：标题只在**解析导出文件时**可得（导出头部 `# 显示名`），
+   * 而落档发生在之后的 accept 请求里，那时已无从回到文件。原实现不携带标题，
+   * person-store 的 `resolveConversation` 只能回落到 `conversation_id`（群号），
+   * 于是 `chat_conversations.title` 被写成 `1248517133@chatroom`，
+   * mining 的群节点 label 直接取该字段 ⇒ 图谱里群节点显示群号而非群名。
+   *
+   * 缺省（老 proposal / 非 txt 来源）= 保持既有回落行为，不改变旧数据语义。
+   */
+  conversation_title?: string;
   /** 本 proposal 覆盖的消息（≤2000 条，按 ts_ms 升序）。 */
   message_ids: readonly string[];
   /** 置信分层（供 UI 筛选与审计）。 */

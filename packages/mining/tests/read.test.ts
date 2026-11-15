@@ -204,6 +204,34 @@ function fakeStore(options: FakeOptions = {}): MiningReadStore {
 
 // ── getGraphSnapshot ────────────────────────────────────────────────────────
 
+describe("getGraphSnapshot · 截断必须显形（批次 A1）", () => {
+  /** 造一个"候选 20 条、实际只落 4 条"的快照 payload。 */
+  function truncatedPayload(): string {
+    const base = JSON.parse(payload());
+    base.stats = { ...base.stats, edge_candidates: 20 };
+    return JSON.stringify(base);
+  }
+
+  it("快照里有 edge_candidates 且大于实际边数 → warnings 带 candidate/kept", () => {
+    const snapshots: GraphSnapshotRow[] = [
+      snapshotRow({ payload_json: truncatedPayload(), edge_count: 4 }),
+    ];
+    const result = getGraphSnapshot(fakeStore({ snapshots }));
+    expect(result).not.toBeNull();
+    const warnings = result?.warnings ?? [];
+    expect(warnings.some((w) => w.startsWith("GRAPH_EDGES_TRUNCATED:"))).toBe(true);
+    expect(warnings.find((w) => w.startsWith("GRAPH_EDGES_TRUNCATED:"))).toContain("candidate=20");
+    expect(result?.snapshot.stats.edge_candidates).toBe(20);
+  });
+
+  it("未截断（无 edge_candidates）→ 不产生多余告警", () => {
+    const snapshots: GraphSnapshotRow[] = [snapshotRow()];
+    const result = getGraphSnapshot(fakeStore({ snapshots }));
+    expect((result?.warnings ?? []).filter((w) => w.startsWith("GRAPH_EDGES_TRUNCATED:"))).toHaveLength(0);
+  });
+});
+
+
 describe("getGraphSnapshot（DESIGN-12 §8.5-A1 / §8.1 过滤口径）", () => {
   it("默认取 global+'' 的最新快照（按 computed_at 降序第一条）", () => {
     const store = fakeStore({

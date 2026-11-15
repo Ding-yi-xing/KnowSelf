@@ -3,8 +3,15 @@
  * 本包是 persons.sqlite 的**唯一入口**：其他包禁止 `new Database(personsDbPath)`（DESIGN-10 §4.5）。
  */
 import Database from "better-sqlite3-multiple-ciphers";
-import { resolvePersonsKey, type PersonsKeySource } from "@knowself/config";
-import { applyKey, verifyKey, type CipherDbRaw } from "./crypto/cipher";
+import { defaultPersonsKeyPath, resolvePersonsKey, type PersonsKeySource } from "@knowself/config";
+import {
+  applyKey,
+  ensureReplyRetrievalSalt,
+  openDerivedCipherDb,
+  verifyKey,
+  type CipherDbRaw,
+  type DerivedCipherDb,
+} from "./crypto/cipher";
 import { DDL_STATEMENTS } from "./ddl.js";
 import {
   COLUMN_MIGRATIONS,
@@ -41,6 +48,8 @@ export interface PersonDb {
   encryptionMode: EncryptionMode;
   prepare: CipherDbRaw["prepare"];
   transaction<T>(fn: () => T): () => T;
+  /** 受控打开回复派生库；调用方拿不到 persons 根密钥。 */
+  openReplyRetrievalDb(dbPath: string, saltPath: string): DerivedCipherDb;
   close(): void;
 }
 
@@ -157,13 +166,15 @@ function seedMeta(raw: CipherDbRaw, mode: EncryptionMode, now: string): void {
 
 export function openPersonDb(opts: PersonDbOptions): PersonDb {
   const mode: EncryptionMode = opts.encryption?.mode ?? "sqlcipher";
-  const key = mode === "sqlcipher" ? resolvePersonsKey(keySource(opts.encryption)) : undefined;
+  const source = keySource(opts.encryption);
+  const key = mode === "sqlcipher" ? resolvePersonsKey(source) : undefined;
   const raw = new Database(opts.dbPath);
 
   try {
     if (key) {
       applyKey(raw, key);
-      verifyKey(raw);
+      // 把载体路径传给校验：失败文案里要能告诉别人「用的是哪把钥匙」（W-9/P0）
+      verifyKey(raw, source.keyPath ?? defaultPersonsKeyPath(source.appDataDir));
     }
     applyPragmas(raw, mode);
     for (const sql of DDL_STATEMENTS) {
@@ -191,6 +202,13 @@ export function openPersonDb(opts: PersonDbOptions): PersonDb {
     prepare: (sql: string) => raw.prepare(sql),
     transaction<T>(fn: () => T): () => T {
       return txn(fn);
+    },
+    openReplyRetrievalDb(dbPath: string, saltPath: string): DerivedCipherDb {
+      if (key === undefined) {
+        throw new Error("reply-retrieval requires an encrypted persons store");
+      }
+      const salt = ensureReplyRetrievalSalt(saltPath);
+      return openDerivedCipherDb(dbPath, key, salt);
     },
     close: () => raw.close(),
   };

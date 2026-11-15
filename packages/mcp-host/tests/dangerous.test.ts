@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createDangerousGate } from "../dist/dangerous.js";
+import { createDangerousGate } from "../src/dangerous.js";
 
 describe("createDangerousGate", () => {
   const safeTool = {

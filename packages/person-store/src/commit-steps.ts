@@ -20,6 +20,18 @@ export interface CommitStagedInput {
    * 缺省时由 staging 行推导（`title` / `kind` 沿用既有值，不覆盖）。
    */
   conversation?: ConversationUpsert;
+  /**
+   * 加法式可选参数（W-31）：会话显示名。
+   *
+   * 为什么需要单独一个字段（而不是要求调用方构造完整 `conversation`）：
+   * 插件侧的落档入口是 `ChatMessageCommitter.commit()`，它只有 `conversation_id`，
+   * 拿不到 `platform` / `kind` / `member_count` / 首末时间——那些正好是
+   * `resolveConversation` 能从 staging 行推导的。唯一推不出来、**只在解析导出文件时存在**
+   * 的是标题（文件头 `# 显示名 : …`）。
+   *
+   * 优先于既有值与回落值：显式给出的标题是权威值；空串/缺省视为未提供。
+   */
+  conversation_title?: string;
 }
 
 export interface CommitStagedResult {
@@ -52,11 +64,36 @@ export function resolveConversation(
     if (row.ts_ms < firstMs) firstMs = row.ts_ms;
     if (row.ts_ms > lastMs) lastMs = row.ts_ms;
   }
+  /**
+   * 标题兜底（W-9/C2）：staging 层**没有** `title`，而调用方经常不传 `conversation`
+   * （插件侧的 `commitStaged` 只传 batch / conversation / proposal / now）。
+   * 这时 `existing?.title ?? ""` 会给**新会话**写空串 —— 而 mining 的群节点 label
+   * 直接取这个字段，空串会撞 `GraphSnapshotSchema.min(1)`，把整个挖掘打挂
+   * （真机 `too_small path:["nodes",4,"label"]`）。
+   *
+   * 兜底取 `conversation_id` 去掉平台前缀后的键，与 `chat-ingest` 里
+   * `title → conversation_key` 的兜底同源，两处不会各说一套。
+   */
+  const existingTitle = (existing?.title ?? "").trim();
+  const fallbackTitle = input.conversation_id.replace(/^[^:]+:/, "");
+  /**
+   * 标题优先级（W-31 修正）：
+   *   ① `input.conversation_title` —— 解析导出文件时读到的真名（权威）
+   *   ② `existing.title` —— 既有值（重复导入不覆盖成回落值）
+   *   ③ `conversation_id` 去前缀 —— 最后兜底，**只在标题彻底未知时**用
+   *
+   * 修正前的实现只有 ②③：插件侧走 `ChatMessageCommitter`（不传 `conversation`）
+   * ⇒ 全部会话的 title 都被写成 ③（`1248517133@chatroom`），mining 的群节点 label
+   * 直接取该字段 ⇒ 图谱群节点显示群号而非群名（真机 69 群 0 真名）。
+   */
+  const explicitTitle = (input.conversation_title ?? "").trim();
+  const title =
+    explicitTitle !== "" ? explicitTitle : existingTitle === "" ? fallbackTitle : existingTitle;
   return {
     conversation_id: input.conversation_id,
     platform: rows[0]?.platform ?? existing?.platform ?? "wechat",
     kind: existing?.kind ?? (senders.size > 2 ? "group" : "direct"),
-    title: existing?.title ?? "",
+    title,
     member_count: Math.max(existing?.member_count ?? 0, senders.size),
     first_msg_at: isoOf(firstMs),
     last_msg_at: isoOf(lastMs),

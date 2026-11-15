@@ -51,6 +51,154 @@ describe("createProfileStore", () => {
     s2.close();
   });
 
+  it("微信协助草稿和审计在重新打开 store 后仍可读取", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "ks-ps-"));
+    const dbPath = join(tmpDir, "profile.sqlite");
+    const first = createProfileStore({ dbPath, sourcesDir: tmpDir, exportsDir: tmpDir });
+    first.wechatAssist.createDraft({
+      id: "draft-1",
+      contact_id: "alice",
+      body: "你好",
+      status: "draft",
+      created_at: "2026-11-14T10:00:00.000Z",
+      sent_at: null,
+      external_id: null,
+    });
+    first.wechatAssist.appendAudit({
+      at: "2026-11-14T10:00:00.000Z",
+      action: "draft_created",
+      draft_id: "draft-1",
+      contact_id: "alice",
+    });
+    first.close();
+
+    const second = createProfileStore({ dbPath, sourcesDir: tmpDir, exportsDir: tmpDir });
+    expect(second.wechatAssist.listDrafts()).toEqual([
+      expect.objectContaining({ id: "draft-1", contact_id: "alice", status: "draft" }),
+    ]);
+    expect(second.wechatAssist.listAudit("draft-1")).toEqual([
+      expect.objectContaining({ action: "draft_created", draft_id: "draft-1" }),
+    ]);
+    second.close();
+  });
+
+  it("微信发送 ledger 支持条件 claim、lease 过期和对账", () => {
+    const store = makeStore();
+    store.wechatAssist.createDraft({
+      id: "draft-ledger",
+      contact_id: "alice",
+      body: "你好",
+      status: "draft",
+      created_at: "2026-11-14T10:00:00.000Z",
+      sent_at: null,
+      external_id: null,
+    });
+
+    const first = store.wechatAssist.claimSendAttempt({
+      draft_id: "draft-ledger",
+      idempotency_key: "draft-ledger",
+      contact_id: "alice",
+      body_hash: "hash-1",
+      lease_owner: "owner-1",
+      now: "2026-11-14T10:00:00.000Z",
+      lease_until: "2026-11-14T10:02:00.000Z",
+    });
+    expect(first).toMatchObject({ status: "processing", attempt_count: 1, lease_owner: "owner-1" });
+
+    const blocked = store.wechatAssist.claimSendAttempt({
+      draft_id: "draft-ledger",
+      idempotency_key: "draft-ledger",
+      contact_id: "alice",
+      body_hash: "hash-1",
+      lease_owner: "owner-2",
+      now: "2026-11-14T10:01:00.000Z",
+      lease_until: "2026-11-14T10:03:00.000Z",
+    });
+    expect(blocked).toBeUndefined();
+
+    store.wechatAssist.markSendUncertain(
+      "draft-ledger",
+      "owner-1",
+      "transport timeout",
+      "2026-11-14T10:02:30.000Z",
+    );
+    const reclaimed = store.wechatAssist.claimSendAttempt({
+      draft_id: "draft-ledger",
+      idempotency_key: "draft-ledger",
+      contact_id: "alice",
+      body_hash: "hash-1",
+      lease_owner: "owner-2",
+      now: "2026-11-14T10:03:00.000Z",
+      lease_until: "2026-11-14T10:05:00.000Z",
+    });
+    expect(reclaimed).toMatchObject({ status: "processing", attempt_count: 2, lease_owner: "owner-2" });
+
+    store.wechatAssist.markSendUncertain(
+      "draft-ledger",
+      "owner-2",
+      "local write failed",
+      "2026-11-14T10:04:00.000Z",
+    );
+    store.wechatAssist.reconcileSend(
+      "draft-ledger",
+      "external-1",
+      "2026-11-14T10:04:30.000Z",
+    );
+    expect(store.wechatAssist.getSendAttempt("draft-ledger")).toMatchObject({
+      status: "sent",
+      external_id: "external-1",
+      attempt_count: 2,
+    });
+    store.close();
+  });
+
+  it("微信发送 ledger 拒绝幂等键、正文和目标身份漂移", () => {
+    const store = makeStore();
+    store.wechatAssist.createDraft({
+      id: "draft-identity-1",
+      contact_id: "alice",
+      body: "你好",
+      status: "draft",
+      created_at: "2026-11-14T10:00:00.000Z",
+      sent_at: null,
+      external_id: null,
+    });
+    store.wechatAssist.createDraft({
+      id: "draft-identity-2",
+      contact_id: "alice",
+      body: "你好",
+      status: "draft",
+      created_at: "2026-11-14T10:01:00.000Z",
+      sent_at: null,
+      external_id: null,
+    });
+
+    const base = {
+      idempotency_key: "stable-key",
+      contact_id: "alice",
+      body_hash: "hash-1",
+      lease_owner: "owner-1",
+      now: "2026-11-14T10:00:00.000Z",
+      lease_until: "2026-11-14T10:02:00.000Z",
+    };
+    store.wechatAssist.claimSendAttempt({ draft_id: "draft-identity-1", ...base });
+
+    expect(() => store.wechatAssist.claimSendAttempt({
+      draft_id: "draft-identity-2",
+      ...base,
+      lease_owner: "owner-2",
+    })).toThrow("idempotency key is already bound to another draft");
+
+    expect(() => store.wechatAssist.claimSendAttempt({
+      draft_id: "draft-identity-1",
+      ...base,
+      body_hash: "hash-2",
+      now: "2026-11-14T10:03:00.000Z",
+      lease_until: "2026-11-14T10:05:00.000Z",
+    })).toThrow("send attempt identity does not match the existing draft");
+    store.close();
+  });
+
   it("store.write 正常派发 core 写入并触发 events", () => {
     const store = makeStore();
     const received: ProfileChangeEvent[] = [];

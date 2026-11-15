@@ -135,6 +135,8 @@ export const RawTextSchema = z.object({
 
 export const SourceStoredSchema = z.object({
   id: SourceIdSchema,
+  /** 调用方可提供的稳定幂等键；旧资料为空且不出现在响应中。 */
+  idempotency_key: z.string().min(1).max(256).optional(),
   kind: SourceKindSchema,
   /** 用户上传时的文件名；kind=url 时是 URL 末段；kind=paste 时为空字符串。 */
   original_name: z.string().max(256),
@@ -171,6 +173,8 @@ export const SourceStoredSchema = z.object({
  */
 export const CreateSourceFromFileSchema = z.object({
   kind: z.literal("file"),
+  /** 同一逻辑资料重试时复用该键，避免重复 Source。 */
+  idempotency_key: z.string().min(1).max(256).optional(),
   /** 通过 multipart 上传的文件；schema 仅约束元数据。 */
   original_name: z.string().min(1).max(256),
   mime_type: SupportedMimeTypeSchema,
@@ -180,6 +184,7 @@ export const CreateSourceFromFileSchema = z.object({
 
 export const CreateSourceFromUrlSchema = z.object({
   kind: z.literal("url"),
+  idempotency_key: z.string().min(1).max(256).optional(),
   url: z.string().url().max(2048),
   user_note: z.string().max(2000).default(""),
   user_tags: z.array(z.string().min(1).max(32)).max(8).default([]),
@@ -187,6 +192,7 @@ export const CreateSourceFromUrlSchema = z.object({
 
 export const CreateSourceFromPasteSchema = z.object({
   kind: z.literal("paste"),
+  idempotency_key: z.string().min(1).max(256).optional(),
   /** 用户粘贴的纯文本；mime 固定 text/plain。 */
   text: z.string().min(1).max(500_000),
   /** 用户给这段文本起的"原始名"，用于 UI 展示；空则用前 30 字。 */
@@ -200,6 +206,39 @@ export const CreateSourceRequestSchema = z.discriminatedUnion("kind", [
   CreateSourceFromUrlSchema,
   CreateSourceFromPasteSchema,
 ]);
+
+/**
+ * 资料摄入的**传输层入参**（W-1，桌面插件 REST 写端点 `POST /sources`）。
+ *
+ * ## 为什么单独定义而不复用 CreateSourceRequest
+ * `CreateSourceRequest` 是**领域层**契约（discriminated union，字段是
+ * `original_name` / `mime_type` / `user_note` / `user_tags`），由 ingestion 库消费；
+ * 而浏览器侧要传的是「一段文本 / 一个网址 / 一份文件的 base64」，且文件内容必须
+ * 编码成 JSON 能承载的形态。两者语义不同：前者是领域入参，后者是**线上传输 DTO**。
+ * 服务端路由负责把本类型映射成 `CreateSourceRequest`，映射规则集中在
+ * `dsh/knowself/src/routes/sources.ts`，不让浏览器知道领域库的字段拼写。
+ *
+ * ## 边界
+ * - 只做加法：不修改 `SourceStoredSchema` / `SourceStatusSchema` / `CreateSourceRequestSchema`。
+ * - `content_base64` 仅 `kind:"file"` 使用，且**不含** `data:` 前缀（纯 base64 内容）。
+ * - `mime_type` 用 string 而非 `SupportedMimeTypeSchema`：浏览器按扩展名推断，
+ *   由服务端映射到领域库白名单后再交给 ingestion（未知类型 → 400，不静默降级）。
+ */
+export const CreateSourceInputSchema = z
+  .object({
+    kind: SourceKindSchema,
+    /** 展示名；paste 缺省时用文本前 30 字（与领域库缺省一致）。 */
+    title: z.string().max(256).optional(),
+    /** 仅 kind:"url"：必须是合法 URL。 */
+    url: z.string().url().max(2048).optional(),
+    /** 仅 kind:"paste"：用户粘贴的纯文本。 */
+    text: z.string().min(1).max(500_000).optional(),
+    /** 仅 kind:"file"：浏览器按扩展名推断的 MIME。 */
+    mime_type: z.string().max(128).optional(),
+    /** 仅 kind:"file"：文件字节的 base64（不含 data: 前缀）。 */
+    content_base64: z.string().max(8_000_000).optional(),
+  })
+  .strict();
 
 /** 列表查询（GET /api/sources）。 */
 export const ListSourcesQuerySchema = z.object({
@@ -234,7 +273,13 @@ export const SourceDetailSchema = z.object({
  *   pending  ─ reject ─► rejected
  *   accepted/edited/rejected 是终态，不允许再转
  */
-export const ProposalStatusSchema = z.enum(["pending", "accepted", "edited", "rejected"]);
+export const ProposalStatusSchema = z.enum([
+  "pending",
+  "processing",
+  "accepted",
+  "edited",
+  "rejected",
+]);
 
 /**
  * 建议落档目标，与 profile.ts WriteRequest 的 target 对齐：
@@ -248,7 +293,13 @@ export const ProposalStatusSchema = z.enum(["pending", "accepted", "edited", "re
  *   聊天消息批次的落档建议；载荷在 `chat_message_staging`，本 target 只存引用与分层。
  *   只有规则/人工产该 kind——`DistillOutputSchema` **不认识**它（LLM 不应产聊天落档建议）。
  */
-export const ProposalTargetKindSchema = z.enum(["core", "card_section", "journal", "chat_message"]);
+export const ProposalTargetKindSchema = z.enum([
+  "core",
+  "card_section",
+  "journal",
+  "chat_message",
+  "source_distill",
+]);
 
 /** 建议针对的具体目标（按 kind 分支）。 */
 export const ProposalTargetCoreSchema = z.object({
@@ -287,11 +338,23 @@ export const ProposalTargetChatMessageSchema = z.object({
   reason_codes: z.array(z.string().min(1).max(64)).max(16).default([]),
 });
 
+/**
+ * Review request for distilling a Source. This is deliberately not a profile
+ * write target: accepting it asks ingestion to create content proposals.
+ */
+export const ProposalTargetSourceDistillSchema = z.object({
+  kind: z.literal("source_distill"),
+  confidence: z.number().min(0).max(1),
+  classifier: z.string().min(1).max(128),
+  reason: z.string().min(1).max(500),
+});
+
 export const ProposalTargetSchema = z.discriminatedUnion("kind", [
   ProposalTargetCoreSchema,
   ProposalTargetCardSectionSchema,
   ProposalTargetJournalSchema,
   ProposalTargetChatMessageSchema,
+  ProposalTargetSourceDistillSchema,
 ]);
 
 export const IngestionProposalSchema = z.object({
@@ -359,6 +422,15 @@ export const IngestRequestSchema = z.object({
   focus_hints: z.array(z.string().min(1).max(120)).max(4).default([]),
   /** 单次最多产出几条 proposals。 */
   max_proposals: z.number().int().min(1).max(20).default(8),
+  /**
+   * 是否强制重蒸（W-6/E）。
+   *
+   * 缺省 `false`：若该 source 已有 `pending` 提案，则**不调模型**，直接复用，
+   * 避免「createSource 内部已蒸一次 + REST 再蒸一次」的叠加重复。
+   * 显式 `true`：先删除该 source 的旧 `pending` 提案（不动 accepted/rejected）
+   * 再重跑。
+   */
+  force: z.boolean().optional(),
 });
 
 export const IngestResponseSchema = z.object({
@@ -370,6 +442,11 @@ export const IngestResponseSchema = z.object({
     input_tokens: z.number().int().min(0).max(2_000_000),
     output_tokens: z.number().int().min(0).max(2_000_000),
   }),
+  /**
+   * 本次是否命中幂等、未调用模型（W-6/E）。
+   * `produced_proposal_ids` 此时是**既有** pending 提案的 id。
+   */
+  reused: z.boolean().optional(),
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -442,6 +519,7 @@ export type RawTextSection = z.infer<typeof RawTextSectionSchema>;
 
 export type SourceStored = z.infer<typeof SourceStoredSchema>;
 export type CreateSourceRequest = z.infer<typeof CreateSourceRequestSchema>;
+export type CreateSourceInput = z.infer<typeof CreateSourceInputSchema>;
 export type ListSourcesQuery = z.infer<typeof ListSourcesQuerySchema>;
 export type ListSourcesResponse = z.infer<typeof ListSourcesResponseSchema>;
 export type SourceDetail = z.infer<typeof SourceDetailSchema>;

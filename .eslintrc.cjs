@@ -7,9 +7,7 @@ module.exports = {
     sourceType: "module",
     project: [
       "./tsconfig.json",
-      "./apps/*/tsconfig.json",
       "./packages/*/tsconfig.json",
-      "./apps/*/tsconfig.test.json",
       "./packages/*/tsconfig.test.json",
     ],
   },
@@ -22,7 +20,6 @@ module.exports = {
     "coverage/",
     "playwright-report/",
     "test-results/",
-    "apps/desktop/src-tauri/target/",
     "docs/",
     "*.config.cjs",
     "*.config.ts",
@@ -58,7 +55,7 @@ module.exports = {
     },
     {
       // 测试文件中 mock / 断言不可避免的 any 操作
-      files: ["**/tests/**", "**/*.test.ts", "**/*.spec.ts", "apps/web/e2e/**"],
+      files: ["**/tests/**", "**/*.test.ts", "**/*.spec.ts"],
       rules: {
         "@typescript-eslint/no-unsafe-assignment": "off",
         "@typescript-eslint/no-unsafe-member-access": "off",
@@ -68,21 +65,6 @@ module.exports = {
         "@typescript-eslint/unbound-method": "off",
         "@typescript-eslint/restrict-template-expressions": "off",
         "@typescript-eslint/no-base-to-string": "off",
-      },
-    },
-    {
-      // server 源码：SQLite 查询 / Hono 中间件边界处不可避免的弱类型
-      files: ["apps/server/src/**/*.ts"],
-      rules: {
-        "@typescript-eslint/no-unsafe-assignment": "off",
-        "@typescript-eslint/no-unsafe-member-access": "off",
-        "@typescript-eslint/no-unsafe-argument": "off",
-        "@typescript-eslint/no-unsafe-return": "off",
-        "@typescript-eslint/no-unsafe-call": "off",
-        "@typescript-eslint/restrict-template-expressions": "off",
-        "@typescript-eslint/no-base-to-string": "off",
-        "@typescript-eslint/no-floating-promises": "off",
-        "@typescript-eslint/unbound-method": "off",
       },
     },
     {

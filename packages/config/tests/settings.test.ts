@@ -18,7 +18,7 @@ describe("loadSettings", () => {
   });
 
   it("parses a valid settings.json", async () => {
-    const { loadSettings } = await import("../dist/settings.js");
+    const { loadSettings } = await import("../src/settings.js");
     writeFileSync(join(tmpDir, "settings.json"), JSON.stringify(makeMinimalSettings()), "utf-8");
     const s = loadSettings(tmpDir);
     expect(s.schema_version).toBe(1);
@@ -27,18 +27,18 @@ describe("loadSettings", () => {
   });
 
   it("throws SettingsParseError for missing file", async () => {
-    const { loadSettings, SettingsParseError } = await import("../dist/settings.js");
+    const { loadSettings, SettingsParseError } = await import("../src/settings.js");
     expect(() => loadSettings(tmpDir)).toThrow(SettingsParseError);
   });
 
   it("throws SettingsParseError for invalid JSON", async () => {
-    const { loadSettings, SettingsParseError } = await import("../dist/settings.js");
+    const { loadSettings, SettingsParseError } = await import("../src/settings.js");
     writeFileSync(join(tmpDir, "settings.json"), "not json", "utf-8");
     expect(() => loadSettings(tmpDir)).toThrow(SettingsParseError);
   });
 
   it("throws SettingsValidationError for missing required field", async () => {
-    const { loadSettings, SettingsValidationError } = await import("../dist/settings.js");
+    const { loadSettings, SettingsValidationError } = await import("../src/settings.js");
     const invalid = makeMinimalSettings();
     (invalid as Record<string, unknown>).app = {};
     writeFileSync(join(tmpDir, "settings.json"), JSON.stringify(invalid), "utf-8");
@@ -59,7 +59,7 @@ describe("saveSettings", () => {
   });
 
   it("saves partial patch and re-reads correctly", async () => {
-    const { loadSettings, saveSettings } = await import("../dist/settings.js");
+    const { loadSettings, saveSettings } = await import("../src/settings.js");
     const saved = saveSettings(tmpDir, {
       app: { locale: "en-US" as const },
     });
@@ -72,7 +72,7 @@ describe("saveSettings", () => {
   });
 
   it("rejects invalid default_provider_id reference", async () => {
-    const { saveSettings, SettingsReferenceError } = await import("../dist/settings.js");
+    const { saveSettings, SettingsReferenceError } = await import("../src/settings.js");
     expect(() =>
       saveSettings(tmpDir, {
         conversation: { default_provider_id: "nonexistent" },
@@ -82,7 +82,7 @@ describe("saveSettings", () => {
 
   it("rejects duplicate purpose default_for", async () => {
     const { loadSettings, saveSettings, SettingsReferenceError } =
-      await import("../dist/settings.js");
+      await import("../src/settings.js");
     const s = loadSettings(tmpDir);
     // Give the first provider default_for=["chat"] so that the duplicate is detected
     const providers = [
@@ -97,7 +97,7 @@ describe("saveSettings", () => {
   });
 
   it("uses atomic write (temp file cleaned up)", async () => {
-    const { saveSettings } = await import("../dist/settings.js");
+    const { saveSettings } = await import("../src/settings.js");
     const { readdirSync } = await import("node:fs");
 
     saveSettings(tmpDir, { app: { theme: "dark" as const } });
@@ -105,6 +105,60 @@ describe("saveSettings", () => {
     const files = readdirSync(tmpDir);
     const tmpFiles = files.filter((f) => f.endsWith(".tmp"));
     expect(tmpFiles).toHaveLength(0);
+  });
+
+  it("persists configured WeChat imports and preserves existing auto-archive settings", async () => {
+    const { loadSettings, saveSettings } = await import("../src/settings.js");
+    const initial = {
+      ...makeMinimalSettings(),
+      auto_archive: {
+        enabled: true,
+        min_confidence: 0.9,
+        group_speaker_threshold: 5,
+        direct_message_threshold: 3,
+        auto_distill_material: true,
+        use_llm: false,
+      },
+    };
+    writeFileSync(join(tmpDir, "settings.json"), JSON.stringify(initial), "utf-8");
+
+    const saved = saveSettings(tmpDir, {
+      automation: {
+        wechat_imports: [
+          {
+            id: "wechat-main",
+            source_path: "C:/exports/wechat",
+            source_id: "source-wechat-main",
+            enabled: true,
+            reader: "txt",
+          },
+        ],
+      },
+    });
+    expect(saved.automation?.wechat_imports).toEqual([
+      expect.objectContaining({ id: "wechat-main", source_id: "source-wechat-main" }),
+    ]);
+    expect(saved.auto_archive?.min_confidence).toBe(0.9);
+
+    const reloaded = loadSettings(tmpDir);
+    expect(reloaded.automation?.wechat_imports[0]?.source_id).toBe("source-wechat-main");
+    expect(reloaded.auto_archive?.enabled).toBe(true);
+  });
+
+  it("rejects duplicate WeChat import ids", async () => {
+    const { saveSettings, SettingsValidationError } = await import("../src/settings.js");
+    const duplicate = {
+      id: "wechat-main",
+      source_path: "C:/exports/wechat",
+      source_id: "source-wechat-main",
+      enabled: true,
+      reader: "txt" as const,
+    };
+    expect(() =>
+      saveSettings(tmpDir, {
+        automation: { wechat_imports: [duplicate, { ...duplicate, source_id: "second" }] },
+      }),
+    ).toThrow(SettingsValidationError);
   });
 });
 
@@ -187,7 +241,7 @@ function makeMinimalSettings() {
     },
     retrieval: {
       enabled: true,
-      embedding_model_id: "Xenova/bge-small-zh-v1.5",
+      embedding_model_id: "qwen3-embedding:0.6b",
       embedding_cache_dir: "data/models",
       chunk_target_tokens: 256,
       chunk_overlap_tokens: 32,

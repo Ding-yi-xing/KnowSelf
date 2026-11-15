@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createOpenAiAdapter } from "../dist/adapter/openai.js";
+import { createOpenAiAdapter } from "../src/adapter/openai";
 
 const testConfig = {
   id: "test-openai",

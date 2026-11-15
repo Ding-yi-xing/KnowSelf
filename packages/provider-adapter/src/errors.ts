@@ -100,3 +100,39 @@ export class ProviderAbortedError extends ProviderError {
     super("ABORTED", `Aborted: ${providerId ?? "unknown"}`, providerId, null, false);
   }
 }
+
+/**
+ * 把上游 HTTP 状态码映射成 provider 侧错误码。
+ *
+ * - 401/403 → `AUTH_FAILED`：上层 `apps/server/src/errors.ts` 会把它映射成 401
+ *   而不是 502，用户看到的是「检查 key」而不是「网关炸了」；
+ * - 429 → `RATE_LIMITED`：限流是**可重试**的，必须与 5xx 区分开，
+ *   否则健康面板看不出「是被限流了」而不是「上游挂了」；
+ * - 其余一律 `UPSTREAM_5XX`（含 404：模型名不存在属上游/配置问题，不是鉴权问题）。
+ *
+ * @param status 上游 HTTP 状态码；null/undefined 表示没有拿到状态码
+ * @returns 对应的 `ProviderErrorCode`
+ */
+export function codeForUpstreamStatus(
+  status: number | null | undefined,
+): ProviderErrorCode {
+  if (status === 401 || status === 403) return "AUTH_FAILED";
+  if (status === 429) return "RATE_LIMITED";
+  return "UPSTREAM_5XX";
+}
+
+/**
+ * 上游状态码是否值得重试。
+ *
+ * 5xx 与 429 都可重试；4xx（除 429）都是确定性拒绝，重试纯属浪费配额。
+ * 单独成函数是为了让 `chat.ts` 与 `structured.ts` 用**同一套**判定，
+ * 避免两边各写一份 `status >= 500` 而漏掉 429。
+ *
+ * @param status 上游 HTTP 状态码；null/undefined 视为不重试（没有状态码通常
+ *   是本地错误，如参数非法）
+ * @returns 是否应重试
+ */
+export function isRetryableStatus(status: number | null | undefined): boolean {
+  if (status === null || status === undefined) return false;
+  return status >= 500 || status === 429;
+}

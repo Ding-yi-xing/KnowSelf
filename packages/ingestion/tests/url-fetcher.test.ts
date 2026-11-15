@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { fetchUrlAsSource } from "../dist/url-fetcher.js";
-import { UrlFetchFailedError } from "../dist/errors.js";
+import { fetchUrlAsSource } from "../src/url-fetcher.js";
+import { UrlFetchFailedError } from "../src/errors.js";
 
 function makeMockRegistry(
   invokeImpl: (name: string, input: unknown) => { is_error: boolean; output: string },

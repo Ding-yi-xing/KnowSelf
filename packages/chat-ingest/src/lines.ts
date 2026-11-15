@@ -153,7 +153,22 @@ function openMessage(
     return;
   }
   if (state.date === null) state.date = resolved.msg_date;
-  const sender_name = rest.slice(0, at);
+  /**
+   * 发送者名字：`[10:00] : 正文` 这种「无名行」会让 `rest.indexOf(": ") === 0`，
+   * `slice(0, 0)` 得到空串。空串会一路写到 `persons.display_name`（
+   * `commit-steps.ts` → `identity.ts` 均原样透传），下游只能靠 `labelOf` 兜底，
+   * 结果就是"图上有个人叫 未命名(xxxx)，没人知道为什么"。
+   *
+   * 这里按描述符**既有**的 `unknown_sender` 约定改写（不新增码值）：
+   *   - 名字变成 `未知(sender=)`，于是 `finalize()` 里那条
+   *     `startsWith(unknown_sender.prefix)` 的分支会自动补一条 `SENDER_UNKNOWN` issue
+   *     —— 满足"能处理，但也看得见"；
+   *   - 顺带说明：改写前后 sender_id 都是同一个伪 ID（空名时 `name:` / 改写后 `name:未知(sender=)`），
+   *     所以**不会**因此把原本分开的人合并到一起（同名归并是既有行为）。
+   */
+  const rawName = rest.slice(0, at);
+  const sender_name =
+    rawName.trim() === "" ? `${spec.unknown_sender.prefix}${spec.unknown_sender.suffix}` : rawName;
   state.pending = {
     line_no: lineNo,
     ts_ms: resolved.ts_ms,

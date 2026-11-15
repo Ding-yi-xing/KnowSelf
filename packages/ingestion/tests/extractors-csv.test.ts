@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { csvExtractor } from "../dist/extractors/csv.js";
-import { ExtractorFailedError } from "../dist/errors.js";
-import type { ExtractorContext } from "../dist/extractors/types.js";
+import { csvExtractor } from "../src/extractors/csv.js";
+import { ExtractorFailedError } from "../src/errors.js";
+import type { ExtractorContext } from "../src/extractors/types.js";
 
 const ctx: ExtractorContext = {
   mimeType: "text/csv",

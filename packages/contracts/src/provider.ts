@@ -134,6 +134,15 @@ export const ProviderHealthSchema = z.object({
   latency_p50_ms: z.number().int().min(0).max(600_000).nullable(),
   consecutive_failures: z.number().int().min(0).max(999).default(0),
   last_error: z.string().max(512).nullable(),
+  /**
+   * 上次失败的错误码（`AUTH_FAILED` / `RATE_LIMITED` / `UPSTREAM_5XX` …，W-7/C）。
+   *
+   * 只写 `last_error` 文本时，健康面板看不出「是被限流」还是「key 失效」
+   * —— 两者该给用户的提示完全不同。纯加法字段，旧调用方不传也不影响。
+   */
+  last_error_code: z.string().max(64).nullable().optional(),
+  /** 上次失败是否可重试（W-7/C）。纯加法字段。 */
+  last_error_retryable: z.boolean().nullable().optional(),
   last_checked_at: IsoTimestampSchema.nullable(),
   reactivate_at: IsoTimestampSchema.nullable(),
 });
@@ -260,6 +269,14 @@ export const ChatChunkErrorSchema = z.object({
   message: z.string().min(1).max(512),
   /** 是否可重试（速率限制 / 网络抖动 → true；鉴权失败 / 模型不存在 → false）。 */
   retryable: z.boolean(),
+  /**
+   * 上游建议的重试等待毫秒数（W-7/B）。
+   *
+   * 来源优先级：`retry-after` 响应头（秒 → 毫秒）> `retry-after-ms` > 无。
+   * `structured.ts` 据此退避；缺省时退化为指数退避。
+   * 纯加法字段，旧调用方不传也不影响。
+   */
+  retry_after_ms: z.number().int().min(0).max(600_000).nullable().optional(),
 });
 
 export const ChatChunkSchema = z.discriminatedUnion("type", [

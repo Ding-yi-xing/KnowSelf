@@ -51,6 +51,13 @@ describe("sources repo", () => {
       expect(result.char_count).toBe(11);
     });
 
+    it("finds a source by a stable idempotency key", () => {
+      const s = makeSource({ idempotency_key: "dsh-session:s1:3" });
+      repo.insert(s);
+      expect(repo.findByIdempotencyKey("dsh-session:s1:3")?.id).toBe(s.id);
+      expect(repo.findByIdempotencyKey("missing")).toBeUndefined();
+    });
+
     it("throws on unknown id", () => {
       expect(() => repo.get("00000000-0000-0000-0000-000000000000")).toThrow(ProfileNotFoundError);
     });

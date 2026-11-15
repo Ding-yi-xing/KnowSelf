@@ -58,6 +58,7 @@ export const DDL_STATEMENTS: string[] = [
   // 附件库：用户提供的原始资料
   `CREATE TABLE IF NOT EXISTS sources (
     id                  TEXT    PRIMARY KEY,
+    idempotency_key     TEXT,
     kind                TEXT    NOT NULL CHECK (kind IN ('file','url','paste')),
     original_name       TEXT    NOT NULL DEFAULT '',
     mime_type           TEXT    NOT NULL,
@@ -81,19 +82,20 @@ export const DDL_STATEMENTS: string[] = [
 
   // Ingestion 建议（用户审阅前的暂存区）
   //
-  // `target_kind` 含 `chat_message`（DESIGN-11 §7.2 #1，V3 授权「加枚举值」）：
+  // `target_kind` includes chat_message and source_distill. The latter is an
+  // Inbox review request that triggers distillation instead of a profile write.
   // 本文件 = **新库的正确终态**；存量旧库的 3 值 CHECK 由 `db.ts` 的
   // `ensureProposalTargetKindConstraint` 增量升级，两者必须保持同一取值集合。
   `CREATE TABLE IF NOT EXISTS ingestion_proposals (
     id                      TEXT    PRIMARY KEY,
     source_id               TEXT    NOT NULL,
-    target_kind             TEXT    NOT NULL CHECK (target_kind IN ('core','card_section','journal','chat_message')),
+    target_kind             TEXT    NOT NULL CHECK (target_kind IN ('core','card_section','journal','chat_message','source_distill')),
     target_ref              TEXT    NOT NULL,
     proposed_body           TEXT    NOT NULL,
     reasoning               TEXT    NOT NULL DEFAULT '',
     source_excerpts         TEXT    NOT NULL DEFAULT '[]',
     produced_by_provider    TEXT    NOT NULL,
-    status                  TEXT    NOT NULL CHECK (status IN ('pending','accepted','edited','rejected')),
+    status                  TEXT    NOT NULL CHECK (status IN ('pending','processing','accepted','edited','rejected')),
     user_edited_body        TEXT,
     created_at              TEXT    NOT NULL,
     decided_at              TEXT,
@@ -125,6 +127,114 @@ export const DDL_STATEMENTS: string[] = [
     key     TEXT PRIMARY KEY,
     value   TEXT NOT NULL
   )`,
+
+  // WeChat assistance state. The host adapter owns policy; SQLite owns the
+  // restart-safe draft and audit trail so a Desktop restart cannot forget a
+  // sent message or reset the rolling quota.
+  `CREATE TABLE IF NOT EXISTS wechat_assist_drafts (
+    id            TEXT PRIMARY KEY,
+    contact_id    TEXT NOT NULL,
+    body          TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('draft','sent','discarded')),
+    created_at    TEXT NOT NULL,
+    sent_at       TEXT,
+    external_id   TEXT
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_wechat_assist_drafts_status
+    ON wechat_assist_drafts(status, created_at DESC)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_wechat_assist_drafts_sent_at
+    ON wechat_assist_drafts(sent_at)`,
+
+  `CREATE TABLE IF NOT EXISTS wechat_assist_audit (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    at            TEXT NOT NULL,
+    action        TEXT NOT NULL CHECK (action IN (
+      'draft_created','draft_discarded','send_rejected',
+      'send_attempted','send_succeeded','send_failed',
+      'reply_task_started','reply_task_stopped','reply_task_paused'
+    )),
+    draft_id      TEXT NOT NULL,
+    contact_id    TEXT NOT NULL,
+    reason        TEXT,
+    external_id   TEXT
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_wechat_assist_audit_draft
+    ON wechat_assist_audit(draft_id, id)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_wechat_assist_audit_at
+    ON wechat_assist_audit(at DESC)`,
+
+  // The send ledger is separate from drafts so an external send can be
+  // reconciled after a timeout, process restart, or local write failure.
+  `CREATE TABLE IF NOT EXISTS wechat_assist_send_ledger (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    draft_id           TEXT NOT NULL UNIQUE,
+    idempotency_key    TEXT NOT NULL UNIQUE,
+    contact_id         TEXT NOT NULL,
+    body_hash          TEXT NOT NULL,
+    target_fingerprint TEXT,
+    status             TEXT NOT NULL CHECK (status IN ('processing','sent','failed','uncertain')),
+    external_id        TEXT,
+    lease_owner        TEXT,
+    lease_until        TEXT,
+    attempt_count      INTEGER NOT NULL DEFAULT 0,
+    last_error         TEXT,
+    started_at         TEXT NOT NULL,
+    finished_at        TEXT,
+    reconciled_at      TEXT
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_wechat_assist_send_ledger_status_lease
+    ON wechat_assist_send_ledger(status, lease_until)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_wechat_assist_send_ledger_contact
+    ON wechat_assist_send_ledger(contact_id, started_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS wechat_reply_tasks (
+    id                 TEXT PRIMARY KEY,
+    account_scope      TEXT NOT NULL,
+    conversation_id    TEXT NOT NULL,
+    contact_id         TEXT NOT NULL,
+    objective          TEXT NOT NULL,
+    provider_id        TEXT NOT NULL,
+    model_id           TEXT NOT NULL,
+    history_authorized INTEGER NOT NULL DEFAULT 0 CHECK (history_authorized IN (0,1)),
+    authorization_version INTEGER NOT NULL DEFAULT 1,
+    status             TEXT NOT NULL CHECK (status IN ('starting','running','stopping','stopped','paused','failed')),
+    stop_reason        TEXT,
+    lease_owner        TEXT,
+    lease_until        TEXT,
+    turn_count         INTEGER NOT NULL DEFAULT 0,
+    send_count         INTEGER NOT NULL DEFAULT 0,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    stopped_at         TEXT
+  )`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_wechat_reply_tasks_active_account
+    ON wechat_reply_tasks(account_scope)
+    WHERE status IN ('starting','running','stopping')`,
+
+  `CREATE INDEX IF NOT EXISTS idx_wechat_reply_tasks_contact
+    ON wechat_reply_tasks(contact_id, updated_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS wechat_reply_turns (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id            TEXT NOT NULL,
+    inbound_message_id TEXT,
+    generated_body     TEXT,
+    status             TEXT NOT NULL CHECK (status IN ('started','generated','sent','skipped','failed','uncertain')),
+    reason             TEXT,
+    created_at         TEXT NOT NULL,
+    finished_at        TEXT,
+    FOREIGN KEY (task_id) REFERENCES wechat_reply_tasks(id) ON DELETE CASCADE
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_wechat_reply_turns_task
+    ON wechat_reply_turns(task_id, id)`,
 
   // V2-05: 模板
   `CREATE TABLE IF NOT EXISTS templates (

@@ -63,6 +63,8 @@ export function buildGraphSnapshot(input: BuildGraphSnapshotInput): BuiltGraphSn
       community_count: detected.communities.length,
       modularity: detected.modularity,
       degraded_sessions: co.degradedSessions,
+      // 只有真的裁剪过才写（未裁剪时留空，避免"永远等于 edge_count"的噪音）
+      ...(co.edgeCandidates > co.edges.length ? { edge_candidates: co.edgeCandidates } : {}),
     },
     nodes: detected.nodes,
     edges: co.edges,

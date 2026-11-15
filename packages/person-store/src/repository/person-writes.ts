@@ -3,6 +3,7 @@
  * `repository/persons.ts` 超 200 行时按「操作族」再拆；`PersonsRepo` 仍原样暴露（由 `persons.ts` 组合）。
  * 锁定避让（§6.2 规则 2）：自动写遇 `manual_locked=1` **跳过并回报 `skipped_locked`，不抛错**。
  */
+import { randomUUID } from "node:crypto";
 import { setPersonMeta, type PersonDb } from "../db";
 import type {
   AutoWriteResult,
@@ -18,6 +19,7 @@ const PROFILE_PRODUCED_BY_KEY = "produced_by.profile";
 type Writes = Pick<
   PersonsRepo,
   | "insert"
+  | "createManualPerson"
   | "updateManual"
   | "updateAutoStats"
   | "updateProfileJson"
@@ -25,6 +27,7 @@ type Writes = Pick<
   | "markMerged"
   | "unmarkMerged"
   | "recomputeStats"
+  | "recomputeAllStats"
 >;
 
 function makeSetter(): {
@@ -79,6 +82,27 @@ export function createPersonWritesRepo(
     );
     return getOrThrow(row.person_id);
   };
+
+  /**
+   * 新建人工人物（见 `PersonsRepo.createManualPerson` 注释）。
+   *
+   * 为什么 `manual_locked=1`：人工建的人一旦被 mining 的自动写覆盖，等于用户的编辑白做。
+   */
+  const createManualPerson = (
+    input: { display_name: string; note?: string; person_id?: string },
+    now: string,
+  ): PersonRow =>
+    insert(
+      {
+        person_id: input.person_id ?? randomUUID(),
+        subject_kind: "contact",
+        display_name: input.display_name,
+        remark: input.note ?? "",
+        manual_locked: true,
+        status: "active",
+      },
+      now,
+    );
 
   const updateManual = (personId: string, patch: PersonPatch, now: string): PersonRow => {
     getOrThrow(personId);
@@ -157,6 +181,64 @@ export function createPersonWritesRepo(
   };
 
   /** 统计列重算（§9.2 `persons_stats` 层）：数据源 `v_chat_messages`（已解析别名、排除回滚批次）。 */
+  /**
+   * 批量重算所有人物的派生统计（`msg_count` / `conv_count` / 首末时间）。
+   *
+   * ## 为什么需要批量版
+   * 单人的 `recomputeStats` 每人跑两条 SQL + 一次 `v_chat_messages` 全视图聚合；
+   * 1,072 个人就是 1,072 次视图扫描（15 万行数据上要几分钟）。这里改成
+   * **一条 GROUP BY 聚合 + 事务内批量 UPDATE**，代价与人数无关、只与消息量有关。
+   *
+   * ## 为什么跳过 `manual_locked`
+   * 与单人版保持一致：人工编辑过的人不该被自动统计覆盖（DESIGN-13 §6.2 规则 2）。
+   *
+   * ## 为什么不改 `updated_at` 以外的列
+   * 只碰这 5 列，`display_name` / `remark` / `status` 一律不碰 —— 统计重算不能顺带改语义。
+   *
+   * @param now ISO8601 时间
+   * @returns 实际更新的人数（跳过的锁行人、以及没有任何消息的人不计）
+   */
+  const recomputeAllStats = (now: string): { updated: number } => {
+    const rows = db
+      .prepare(
+        `SELECT sender_person_id AS person_id,
+                COUNT(*)                        AS msg_count,
+                COUNT(DISTINCT conversation_id) AS conv_count,
+                MIN(ts_ms)                       AS first_ms,
+                MAX(ts_ms)                       AS last_ms
+           FROM v_chat_messages
+          WHERE sender_person_id IS NOT NULL
+          GROUP BY sender_person_id`,
+      )
+      .all() as {
+      person_id: string;
+      msg_count: number;
+      conv_count: number;
+      first_ms: number | null;
+      last_ms: number | null;
+    }[];
+    if (rows.length === 0) return { updated: 0 };
+    const stmt = db.prepare(
+      `UPDATE persons SET msg_count = ?, conv_count = ?, first_msg_at = ?, last_msg_at = ?, updated_at = ?
+        WHERE person_id = ? AND manual_locked = 0`,
+    );
+    let updated = 0;
+    db.transaction(() => {
+      for (const row of rows) {
+        const result = stmt.run(
+          row.msg_count,
+          row.conv_count,
+          isoOrNull(row.first_ms),
+          isoOrNull(row.last_ms),
+          now,
+          row.person_id,
+        );
+        updated += result.changes;
+      }
+    })();
+    return { updated };
+  };
+
   const recomputeStats = (personId: string, now: string): PersonRow => {
     const current = getOrThrow(personId);
     if (current.manual_locked) return current;
@@ -189,6 +271,8 @@ export function createPersonWritesRepo(
 
   return {
     insert,
+    createManualPerson,
+    recomputeAllStats,
     updateManual,
     updateAutoStats,
     updateProfileJson,

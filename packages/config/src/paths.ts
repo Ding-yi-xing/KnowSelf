@@ -10,6 +10,8 @@ export interface DataPaths {
   modelsDir: string;
   conversationsDbPath: string;
   retrievalDbPath: string;
+  replyRetrievalDbPath: string;
+  replyRetrievalSaltPath: string;
   /** DESIGN-10 §8.1：persons.sqlite（person-store 唯一拥有者与唯一入口）。 */
   personsDbPath: string;
   /** DESIGN-16 §8.3 / §9.1：automation.sqlite 所在目录（独立库，automation 包独占）。 */
@@ -31,6 +33,8 @@ export function getDataPaths(rootDir: string, dataSubdir?: string): DataPaths {
     modelsDir: abs(join(d, "models")),
     conversationsDbPath: abs(join(d, "conversations.sqlite")),
     retrievalDbPath: abs(join(d, "retrieval.sqlite")),
+    replyRetrievalDbPath: abs(join(d, "reply-retrieval.sqlite")),
+    replyRetrievalSaltPath: abs(join(d, "reply-retrieval.salt")),
     personsDbPath: abs(join(d, "persons.sqlite")),
     automationDir: abs(join(d, "automation")),
     automationDbPath: abs(join(d, "automation", "automation.sqlite")),

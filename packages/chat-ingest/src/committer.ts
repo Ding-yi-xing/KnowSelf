@@ -40,6 +40,8 @@ export interface ChatCommitStoreLike {
     conversation_id: string;
     proposal_id: string;
     now: string;
+    /** W-31：会话显示名；缺省时由 person-store 回落到 `conversation_id`（群号）。 */
+    conversation_title?: string;
   }): { committed: number; skipped: number };
 }
 
@@ -48,6 +50,8 @@ export interface ChatMessageCommitTargetLike {
   kind: "chat_message";
   batch_id: string;
   conversation_id: string;
+  /** W-31：会话显示名（可选，加法式；缺省 = 回落 `conversation_id`）。 */
+  conversation_title?: string;
   message_ids: readonly string[];
   tier: "auto" | "review";
   reason_codes: readonly string[];
@@ -126,6 +130,11 @@ export function createChatMessageCommitter(
           conversation_id: target.conversation_id,
           proposal_id: input.proposal_id,
           now: input.now,
+          // W-31：把解析阶段已知的会话显示名交给 person-store 落档，
+          // 否则 `resolveConversation` 只能回落成 `conversation_id`（群号）。
+          ...(target.conversation_title === undefined || target.conversation_title.trim() === ""
+            ? {}
+            : { conversation_title: target.conversation_title.trim() }),
         });
       } catch (cause) {
         if (cause instanceof ChatIngestError) throw cause;

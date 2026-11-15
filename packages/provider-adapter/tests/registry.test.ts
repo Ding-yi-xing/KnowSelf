@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { createRegistry } from "../dist/registry.js";
+import { createRegistry } from "../src/registry";
 import type { ProviderConfig } from "@knowself/contracts";
-import { makeInitialHealth, transitionOnFailure } from "../dist/failover.js";
+import { makeInitialHealth, transitionOnFailure } from "../src/failover";
 
 function makeConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {

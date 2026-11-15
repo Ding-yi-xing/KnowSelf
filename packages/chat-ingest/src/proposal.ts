@@ -36,6 +36,8 @@ export interface ChatMessageProposalTarget {
   kind: "chat_message";
   batch_id: string;
   conversation_id: string;
+  /** W-31：会话显示名（解析导出文件时可得，落档时用于写 `chat_conversations.title`）。 */
+  conversation_title?: string;
   message_ids: string[];
   tier: TierLabel;
   reason_codes: string[];
@@ -262,6 +264,11 @@ export class ProposalBuilder {
         kind: "chat_message",
         batch_id: input.batch_id,
         conversation_id: input.conversation.conversation_id,
+        // W-31：标题随 target 一起持久化（`ingestion_proposals.target_ref` 是原样 JSON），
+        // 落档时由 committer 透传给 `commitStaged`，否则 conversations.title 会回落成群号。
+        ...(input.conversation.title.trim() === ""
+          ? {}
+          : { conversation_title: input.conversation.title.trim() }),
         message_ids: messages.map((message) => message.message_id),
         tier: input.tier,
         reason_codes: [...input.reason_codes],

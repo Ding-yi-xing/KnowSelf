@@ -75,6 +75,52 @@ export function createProposalsRepo(db: ProfileDb) {
       }
     },
 
+    /**
+     * 写入自动归档判定结果（批次 2 / B2-1）。
+     *
+     * ## 为什么写进 `target_ref` 而不是加列
+     * `target_ref` 本来就是这个 proposal 的 **JSON 载荷**（`rowToProposal` 直接
+     * `parseJsonColumn<ProposalTarget>`），不同 `target_kind` 天然带不同字段。
+     * 加列会让 `sqlite_master` 里的建表语句变样，直接打挂
+     * `db-migration-proposals.test.ts` 的两条 golden 断言（列/行/索引逐字比对）——
+     * 那是"schema 变更必须留痕"的护栏，不该为了加三个诊断字段去动它。
+     * 而且这三列**从不参与 SQL 查询**（只在响应里展示），放 JSON 没有性能代价。
+     *
+     * @param proposalId 提案 id
+     * @param verdict 判定结果（写进 target 的 `classification` 字段）
+     */
+    setClassification(
+      proposalId: ProposalId,
+      verdict: { target: string; confidence: number; classifier: string },
+    ): void {
+      const row = db
+        .prepare("SELECT target_ref FROM ingestion_proposals WHERE id = ?")
+        .get(proposalId) as { target_ref: string } | undefined;
+      if (row === undefined) {
+        // 用普通 Error：`ProfileRefKind` 目前只覆盖 core/card/journal 三种，
+        // 没有 `proposal`——硬塞一个"看起来像"的 kind 会让错误语义失真。
+        throw new Error(`提案不存在: ${proposalId}`);
+      }
+      // 用裸 JSON.parse（而不是 `parseJsonColumn`）：这里要的是"原样载荷"，
+      // 而 `parseJsonColumn` 的泛型会被 `ProposalTarget` 联合类型约束，反而要来回断言。
+      let target: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = JSON.parse(row.target_ref);
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          target = parsed as Record<string, unknown>;
+        }
+      } catch {
+        target = {};
+      }
+      target["suggested_target"] = verdict.target;
+      target["confidence"] = verdict.confidence;
+      target["classifier"] = verdict.classifier;
+      db.prepare("UPDATE ingestion_proposals SET target_ref = ? WHERE id = ?").run(
+        JSON.stringify(target),
+        proposalId,
+      );
+    },
+
     listBySource(sourceId: SourceId): IngestionProposal[] {
       const rows = db
         .prepare("SELECT * FROM ingestion_proposals WHERE source_id = ? ORDER BY created_at DESC")
@@ -111,6 +157,64 @@ export function createProposalsRepo(db: ProfileDb) {
       return Object.fromEntries(rows.map((row) => [row.status, row.count])) as Partial<
         Record<ProposalStatus, number>
       >;
+    },
+
+    /**
+     * Deletes pending content proposals for a forced re-distill.
+     *
+     * 用途：强制重蒸（`force: true`）前清场。**绝不碰 accepted / rejected /
+     * edited** —— those are user decisions. `source_distill` is also retained:
+     * it is a pending review request, not a prior model output.
+     *
+     * @param sourceId 资料 id
+     * @returns 实际删除的行数
+     */
+    deletePendingBySource(sourceId: SourceId): number {
+      const info = db
+        .prepare(
+          "DELETE FROM ingestion_proposals WHERE source_id = ? AND status = 'pending' AND target_kind <> 'source_distill'",
+        )
+        .run(sourceId);
+      return info.changes;
+    },
+
+    /**
+     * Claims a source-distill review request. The conditional update is the
+     * concurrency boundary for repeated clicks or multiple windows.
+     */
+    claimSourceDistill(id: ProposalId): IngestionProposal | null {
+      const info = db
+        .prepare(
+          `UPDATE ingestion_proposals
+           SET status = 'processing'
+           WHERE id = ? AND target_kind = 'source_distill' AND status = 'pending'`,
+        )
+        .run(id);
+      return info.changes === 1 ? this.get(id) : null;
+    },
+
+    /** Marks a previously claimed source-distill request as accepted. */
+    completeSourceDistill(id: ProposalId, now: string): IngestionProposal | null {
+      const info = db
+        .prepare(
+          `UPDATE ingestion_proposals
+           SET status = 'accepted', decided_at = ?
+           WHERE id = ? AND target_kind = 'source_distill' AND status = 'processing'`,
+        )
+        .run(now, id);
+      return info.changes === 1 ? this.get(id) : null;
+    },
+
+    /** Releases a failed source-distill claim so a user may retry it. */
+    releaseSourceDistill(id: ProposalId): IngestionProposal | null {
+      const info = db
+        .prepare(
+          `UPDATE ingestion_proposals
+           SET status = 'pending'
+           WHERE id = ? AND target_kind = 'source_distill' AND status = 'processing'`,
+        )
+        .run(id);
+      return info.changes === 1 ? this.get(id) : null;
     },
 
     get(id: ProposalId): IngestionProposal {

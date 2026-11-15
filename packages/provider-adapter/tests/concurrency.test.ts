@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createSemaphore } from "../dist/concurrency.js";
+import { createSemaphore } from "../src/concurrency";
 
 describe("createSemaphore", () => {
   it("acquires up to max concurrently", async () => {

@@ -26,6 +26,89 @@ export interface RetrievalDb {
   transaction<T>(fn: () => T): () => T;
 }
 
+export interface ReplyDbStatement {
+  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
+  get(...params: unknown[]): unknown;
+  all(...params: unknown[]): unknown[];
+}
+
+export interface ReplyRetrievalDb {
+  raw: {
+    exec(sql: string): unknown;
+    pragma(source: string): unknown;
+    close(): void;
+    transaction<T>(fn: () => T): () => T;
+  };
+  prepare(sql: string): ReplyDbStatement;
+  transaction<T>(fn: () => T): () => T;
+  close(): void;
+}
+
+const REPLY_DDL: string[] = [
+  `CREATE TABLE IF NOT EXISTS reply_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS reply_conversations (
+    conversation_id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL,
+    account_scope TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source_highwater_ts_ms INTEGER,
+    source_highwater_message_id TEXT,
+    state TEXT NOT NULL CHECK (state IN ('pending','ready','degraded','failed')),
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_reply_conversations_contact ON reply_conversations(contact_id)",
+  `CREATE TABLE IF NOT EXISTS reply_messages (
+    message_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    ts_ms INTEGER NOT NULL,
+    sender_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES reply_conversations(conversation_id) ON DELETE CASCADE
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_reply_messages_conv_ts ON reply_messages(conversation_id, ts_ms, message_id)",
+  `CREATE VIRTUAL TABLE IF NOT EXISTS reply_messages_fts USING fts5(
+    content,
+    conversation_id UNINDEXED,
+    message_id UNINDEXED,
+    content='reply_messages',
+    content_rowid='rowid',
+    tokenize='unicode61 remove_diacritics 2'
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS reply_messages_ai AFTER INSERT ON reply_messages BEGIN
+    INSERT INTO reply_messages_fts(rowid, content, conversation_id, message_id)
+    VALUES (new.rowid, new.content, new.conversation_id, new.message_id);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS reply_messages_ad AFTER DELETE ON reply_messages BEGIN
+    INSERT INTO reply_messages_fts(reply_messages_fts, rowid, content, conversation_id, message_id)
+    VALUES ('delete', old.rowid, old.content, old.conversation_id, old.message_id);
+  END`,
+  `CREATE TABLE IF NOT EXISTS reply_index_checkpoints (
+    conversation_id TEXT PRIMARY KEY,
+    last_ts_ms INTEGER,
+    last_message_id TEXT,
+    index_version TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending','ready','degraded','failed')),
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES reply_conversations(conversation_id) ON DELETE CASCADE
+  )`,
+];
+
+export function openReplyRetrievalDbFromHandle(handle: ReplyRetrievalDb): ReplyRetrievalDb {
+  handle.raw.pragma("journal_mode = WAL");
+  handle.raw.pragma("synchronous = NORMAL");
+  handle.raw.pragma("foreign_keys = ON");
+  for (const sql of REPLY_DDL) handle.raw.exec(sql);
+  return handle;
+}
+
 function ensureColumns(
   raw: DatabaseInstance,
   table: string,

@@ -23,6 +23,7 @@ function mockStore(): ProfileStore {
     sources: {
       list: vi.fn(() => ({ items: [], total: 0 })),
       get: vi.fn(() => sources[0]),
+      findByIdempotencyKey: vi.fn((key: string) => sources.find((s) => s.idempotency_key === key)),
       insert: vi.fn((s: SourceStored) => {
         sources.push(s);
       }),
@@ -177,6 +178,31 @@ describe("createSource — kind=paste", () => {
     expect(result.mime_type).toBe("text/plain");
     expect(result.extracted_text).toBe("Some pasted text content");
     expect(result.file_path).toBeNull();
+  });
+
+  it("reuses the existing Source for a repeated idempotency key", async () => {
+    const store = mockStore();
+    const deps = {
+      store,
+      toolRegistry: mockToolRegistry(),
+      sourcesDir: "/tmp/test-sources",
+      conversationId: "00000000-0000-0000-0000-000000000001",
+      now: () => "2026-01-01T00:00:00.000Z",
+    };
+    const req: CreateSourceRequest & { kind: "paste" } = {
+      kind: "paste",
+      idempotency_key: "dsh-session:session-1:7",
+      text: "same source",
+      original_name: "session turn",
+      user_note: "",
+      user_tags: [],
+    };
+
+    const first = await createSource(deps, req);
+    const second = await createSource(deps, req);
+
+    expect(second.id).toBe(first.id);
+    expect(store.sources.insert).toHaveBeenCalledTimes(1);
   });
 });
 

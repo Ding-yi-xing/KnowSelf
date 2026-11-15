@@ -14,6 +14,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type {
+  ChatConversationRow,
   ChatPlatform,
   ConversationKind,
   ConversationUpsert,
@@ -478,6 +479,50 @@ function resolvePipeline(options: IngestExportOptions, now: string): PipelineDep
   };
 }
 
+/**
+ * W-31：把解析到的会话显示名**回填**到既有会话行（幂等，可重跑）。
+ *
+ * ## 为什么需要这一步（而不只靠落档时透传标题）
+ * 落档侧已经能带上 `conversation_title`（见 `ChatMessageCommitter`），但那只对
+ * **新落档**生效：`commitStaged` 在"本会话全部消息已落档"时（`rows.length === 0`）
+ * 直接短路返回，`resolveConversation` 根本不跑。于是历史库里已经存在的
+ * `chat_conversations.title`（被旧逻辑写成群号）在重复导入时**永远修不回来** ——
+ * 而 mining 的群节点 label 直接取这个字段。
+ *
+ * 所以这里在 staging 阶段（无论消息是新增还是已存在）比对一次标题：
+ *   - 行不存在（全新会话）→ 什么都不做，交给落档路径写（避免造出 0 消息的幽灵会话行）；
+ *   - 行存在且标题不同 → 只改 `title`，其余字段（member_count / 首末时间 / source_ref）
+ *     原样带回，统计列由 `recomputeStats` 维护，这里不碰。
+ *
+ * 复用 `upsertFromCommit` 而不再造一条专用 SQL：它是会话表的唯一写入口
+ * （`title` 覆盖、其余取并集），语义正好。
+ *
+ * @returns 是否发生了回填（供调用方/诊断统计）
+ */
+function syncConversationTitle(
+  store: PersonStore,
+  existing: ChatConversationRow,
+  conversation: NormalizedConversation,
+  now: string,
+): boolean {
+  const wanted = conversation.title.trim();
+  if (wanted === "" || existing.title === wanted) return false;
+  store.conversations.upsertFromCommit(
+    {
+      conversation_id: existing.conversation_id,
+      platform: existing.platform,
+      kind: existing.kind,
+      title: wanted,
+      member_count: existing.member_count,
+      first_msg_at: existing.first_msg_at,
+      last_msg_at: existing.last_msg_at,
+      source_ref: existing.source_ref,
+    },
+    now,
+  );
+  return true;
+}
+
 /** 阶段 [5]~[6]：落 staging → Tier 判定 → 回写 staging 的 `tier` / `reason_codes`。 */
 function stageAndJudge(
   deps: PipelineDeps,
@@ -499,6 +544,8 @@ function stageAndJudge(
   }
 
   const existing = store.conversations.get(conversation_id);
+  // W-31：标题回填（幂等）。历史库里 title 被写成群号时，靠这一步修回来。
+  if (existing !== null) syncConversationTitle(store, existing, conversation, deps.now);
   // 批 2 / 1B′：唯一的信任判定来源。`会话已有历史 ∨ auto_ok 预授权`。
   // 本机 `data/chat-ingest/` 不存在（auto_ok.txt 缺失），只认白名单会让 1B′ 永远不生效；
   // 接上 `exists` 后用户路径是「首次导入 → 接受一次 → 之后全自动」，无需编辑配置文件。
@@ -508,7 +555,27 @@ function stageAndJudge(
   );
   const knownSenders: string[] = [];
   for (const senderId of speakers) {
-    if (senderId === "me") continue;
+    if (senderId === "me") {
+      // W-9：self 的消息此前完全不参与关系分析 —— 视图 `v_chat_messages` 靠
+      // `aliases(platform, platform_uid, alias=sender_id)` JOIN 出 `sender_person_id`，
+      // 而 self 的 alias 从来没人建，于是 JOIN 不到 → NULL → 被 mining 过滤掉，
+      // 表现为「我在图里但 degree=0」。
+      //
+      // 修法：写入侧把哨兵 `"me"` 接上 alias（A+C 的 C）。因为 `"me"` 是**我们自己写的
+      // 哨兵**（与导出里的真实 uid 无关，见 `lines.ts` 的 senderIdOf），所以这一行
+      // 同时覆盖「历史已导入的行」（视图是查询期 JOIN，补上 alias 就自动解析）和未来导入。
+      // `upsertExtractor` 幂等（samePerson → created=false），重复导入不会插出多行。
+      store.aliases.upsertExtractor({
+        person_id: "me",
+        platform: conversation.platform,
+        alias: senderId,
+        normalized: senderId,
+        alias_kind: "platform_uid",
+        confidence: 1,
+        now: deps.now,
+      });
+      continue;
+    }
     if (store.aliases.resolvePersonId(conversation.platform, senderId) !== null) {
       knownSenders.push(senderId);
     }

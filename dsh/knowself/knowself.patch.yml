@@ -1,0 +1,12 @@
+# knowSelf 插件挂载 patch（供 dsh 宿主加载）
+# 语义：顶层是 patch-entry 数组；每个 entry 的 `insert` 字段是「插入」的新行列表。
+# 外层可带 `id` 指定插入到某 group（省略 = 全局 append）。
+# 用法：dsh web --patch ./knowself.patch.yml
+#
+# 注：name 用**相对路径**指向 esbuild 自包含 bundle（dist/bundle/index.js）。
+# 原因：① dsh 从 $DSH_HOME/profiles/web 解析包名，找不到工作区包；
+#       ② 领域库 dist 的 ESM import 缺 .js 扩展名，纯 Node ESM 无法直接加载，
+#          必须用 esbuild 打包成自包含 bundle（esbuild 能解析无扩展名 import）。
+- insert:
+    - id: knowself
+      name: './dist/bundle/index.js'

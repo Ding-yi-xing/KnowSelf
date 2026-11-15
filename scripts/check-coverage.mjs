@@ -26,8 +26,6 @@ const THRESHOLDS = {
   "packages/provider-adapter": { lines: 85, branches: 90 },
   "packages/mcp-host": { lines: 85, branches: 90 },
   "packages/ingestion": { lines: 80, branches: 75 },
-  "apps/server": { lines: 85, branches: 90 },
-  "apps/web": { lines: 75, branches: 85 },
 };
 
 // ── files excluded from coverage per package (pre-existing, no tests) ─

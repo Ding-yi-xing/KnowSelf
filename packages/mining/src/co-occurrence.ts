@@ -61,6 +61,11 @@ export interface CoOccurrenceInput {
   readonly minEdgeStrength?: number;
   readonly maxNodes?: number;
   readonly maxEdges?: number;
+  /**
+   * W29：会话节点类型判定。缺省全部按 `"group"`，既有调用方零行为变化。
+   * pipeline 注入后把单聊会话标成 `"direct"`，在 group 节点循环里消费。
+   */
+  readonly conversationKindOf?: (conversationId: string) => "group" | "direct";
 }
 
 export interface CoOccurrenceResult {
@@ -70,6 +75,14 @@ export interface CoOccurrenceResult {
   readonly degradedSessions: number;
   /** 审计用告警码（不进快照 payload——§4.5 的 `truncated` 标记与 §8.2 的 strict schema 冲突，按契约取 §8.2）。 */
   readonly warnings: string[];
+  /**
+   * 裁剪**前**的候选边数（已过滤 minStrength、且两端节点都保留）。
+   *
+   * 为什么要带出来：`edges.length` 顶到上限时，用户看到"10,000 条边"会当成全部，
+   * 而实际候选可能是 18,000+。这个数字必须能被上层写进快照与提示里
+   * （真机全量：1206 节点、候选 18k+、保留 10k，此前完全静默）。
+   */
+  readonly edgeCandidates: number;
 }
 
 interface RawEdge {
@@ -290,9 +303,11 @@ export function buildCoOccurrence(input: CoOccurrenceInput): CoOccurrenceResult 
   for (const conversationId of [...groupIds].sort(byKeyAsc)) {
     const sizeRaw = groupMsgCount.get(conversationId) ?? 0;
     if (sizeRaw === 0) continue; // §4.1：窗口内有消息才成节点
+    // W29：会话类型由调用方注入（缺省 group），label 仍取 groups 传入的标签。
+    const kind = input.conversationKindOf?.(conversationId) ?? "group";
     nodes.push({
       id: conversationId,
-      kind: "group",
+      kind,
       label: groupLabels.get(conversationId) ?? conversationId,
       ref_id: conversationId,
       size_raw: sizeRaw,
@@ -441,7 +456,8 @@ export function buildCoOccurrence(input: CoOccurrenceInput): CoOccurrenceResult 
   }
   const keptIds = new Set(keptNodes.map((n) => n.id));
   let keptEdges = visible.filter((e) => keptIds.has(e.source) && keptIds.has(e.target));
-  if (keptEdges.length > maxEdges) {
+  const edgeCandidates = keptEdges.length;
+  if (edgeCandidates > maxEdges) {
     keptEdges = [...keptEdges]
       .sort(
         (a, b) =>
@@ -449,7 +465,8 @@ export function buildCoOccurrence(input: CoOccurrenceInput): CoOccurrenceResult 
           byKeyAsc(edgeId(a.kind, a.source, a.target), edgeId(b.kind, b.source, b.target)),
       )
       .slice(0, maxEdges);
-    warnings.push("GRAPH_EDGES_TRUNCATED");
+    // 带数字的告警：只说 "GRAPH_EDGES_TRUNCATED" 等于没说——用户/运维看不到差多少
+    warnings.push(`GRAPH_EDGES_TRUNCATED:candidate=${edgeCandidates} kept=${maxEdges}`);
   }
 
   const finalEdges: GraphEdge[] = keptEdges
@@ -484,7 +501,7 @@ export function buildCoOccurrence(input: CoOccurrenceInput): CoOccurrenceResult 
     }))
     .sort((a, b) => byKeyAsc(a.id, b.id));
 
-  return { nodes: finalNodes, edges: finalEdges, degradedSessions, warnings };
+  return { nodes: finalNodes, edges: finalEdges, degradedSessions, warnings, edgeCandidates };
 }
 
 /** `CoOccurrenceBuilder` 别名（DESIGN-12 §12 P1-5 命名）。 */

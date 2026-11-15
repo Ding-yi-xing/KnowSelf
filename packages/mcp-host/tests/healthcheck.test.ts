@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { runStartupCheck } from "../dist/healthcheck.js";
-import { createStatusTracker } from "../dist/status.js";
+import { runStartupCheck } from "../src/healthcheck.js";
+import { createStatusTracker } from "../src/status.js";
 
 function makeMockClient(listToolsImpl: () => Promise<unknown[]>) {
   return {

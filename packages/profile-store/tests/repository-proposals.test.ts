@@ -116,6 +116,30 @@ describe("proposals repo", () => {
     expect(r3.user_edited_body).toBeNull();
   });
 
+  it("source_distill claim, release, and complete are conditional", () => {
+    const NOW = "2026-05-28T12:00:00.000Z";
+    const id = "source-distill-1";
+    repo.insertMany([
+      makeProposal({
+        id,
+        target: {
+          kind: "source_distill",
+          confidence: 0.4,
+          classifier: "dsh-session-rule-v1",
+          reason: "review before distilling",
+        },
+      }),
+    ]);
+
+    expect(repo.claimSourceDistill(id)?.status).toBe("processing");
+    expect(repo.claimSourceDistill(id)).toBeNull();
+    expect(repo.releaseSourceDistill(id)?.status).toBe("pending");
+    expect(repo.completeSourceDistill(id, NOW)).toBeNull();
+    expect(repo.claimSourceDistill(id)?.status).toBe("processing");
+    expect(repo.completeSourceDistill(id, NOW)?.status).toBe("accepted");
+    expect(repo.get(id).decided_at).toBe(NOW);
+  });
+
   it("deleteProposal — valid delete", () => {
     repo.insertMany([makeProposal()]);
     repo.listBySource(SOURCE_ID); // ensure it exists

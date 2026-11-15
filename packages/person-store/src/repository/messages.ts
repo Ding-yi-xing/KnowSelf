@@ -20,6 +20,21 @@ export interface MessagesRepo extends MentionsRepo, TraceRepo, MessageStreamRepo
     from_ms?: number;
     to_ms?: number;
   }): number;
+  /**
+   * 「无法归属到人」的消息条数（W-9 收口）。
+   *
+   * 判据：`v_chat_messages.sender_person_id IS NULL`（平台 ID 在 `aliases` 里解析不到人）
+   * 且 `role <> 'system'`。**必须排除 system**：系统提示本就不该有发送者，
+   * 算进去会让「已修好」的库永远显示非 0，把真实缺陷埋掉。
+   *
+   * @param q `batch_id` 只统计某次导入落库的消息（用于回执里的「其中 N 条」）
+   */
+  countUnattributed(q?: { batch_id?: string }): number;
+  /**
+   * 按**平台原始发送者 ID** 计数（`chat_messages.sender_id`，不经别名解析）。
+   * 用于「会话表与消息表是否一致」这类自检，故不看 `v_chat_messages`。
+   */
+  countBySenderId(senderId: string): number;
   insertOrIgnore(rows: readonly ChatMessageInsert[]): { inserted: number; ignored: number };
   list(q: {
     conversation_id?: string;
@@ -65,6 +80,36 @@ export function createMessagesRepo(db: PersonDb): MessagesRepo {
       .prepare(`SELECT COUNT(*) AS n FROM chat_messages m ${f.join} ${f.where}`)
       .get(...f.params) as { n: number };
     return row.n;
+  };
+
+  /**
+   * 无法归属到人的消息条数。走视图（已排除回滚批次），`system` 一律不计
+   * —— 系统消息不参与关系分析，算进去会把真实缺陷埋掉。
+   *
+   * 带 `batch_id` 时按批过滤：`v_chat_messages` 不投影 `batch_id`，
+   * 故 JOIN 回 `chat_messages` 取批次；视图侧仍然负责「回滚批次」的过滤。
+   */
+  const countUnattributed = (q: { batch_id?: string } = {}): number => {
+    const batchId = q.batch_id;
+    const sql =
+      batchId === undefined
+        ? `SELECT COUNT(*) AS n FROM v_chat_messages v
+            WHERE v.sender_person_id IS NULL AND v.role <> 'system'`
+        : `SELECT COUNT(*) AS n FROM v_chat_messages v
+             JOIN chat_messages m ON m.message_id = v.message_id
+            WHERE m.batch_id = ? AND v.sender_person_id IS NULL AND v.role <> 'system'`;
+    const row = (
+      batchId === undefined ? db.prepare(sql).get() : db.prepare(sql).get(batchId)
+    ) as { n: number } | undefined;
+    return row?.n ?? 0;
+  };
+
+  /** 平台原始发送者 ID 计数（不经别名解析；用于「会话表与消息表一致」自检）。 */
+  const countBySenderId = (senderId: string): number => {
+    const row = db
+      .prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE sender_id = ?")
+      .get(senderId) as { n: number } | undefined;
+    return row?.n ?? 0;
   };
 
   /** 幂等落档（L2）：主键冲突即跳过，返回实际写入 / 跳过行数。 */
@@ -167,6 +212,8 @@ export function createMessagesRepo(db: PersonDb): MessagesRepo {
   return {
     get,
     count,
+    countUnattributed,
+    countBySenderId,
     insertOrIgnore,
     list,
     searchContent,

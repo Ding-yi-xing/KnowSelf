@@ -23,3 +23,4 @@ export * from "./mining";
 export * from "./person";
 export * from "./person-detail";
 export * from "./semantic";
+export * from "./ability";

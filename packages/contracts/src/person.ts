@@ -8,7 +8,7 @@
  *
  * 时间戳口径：本文件是**行形态**（逐字抄 DESIGN-10 §2.1~§2.3 的列语义）→ ISO8601 TEXT。
  * API DTO 若需 epoch 毫秒（`*_ts_ms`），由 chat-engine 路由层转换（DESIGN-19 §3.2），
- * **不在 apps/web 做日期解析**。
+ * UI 宿主不得自行重复日期解析；使用领域契约提供的值。
  *
  * 弱模型实施提示：
  *   1. `manual_locked` 一律 `z.boolean()`（DB 的 0/1 在 repository 层转换）。

@@ -1,0 +1,7 @@
+# 由 @knowself/dsh-plugin 的 dsh.bundle.patch 指向；name 以本文件所在目录为基准
+# （V7 已核实：顶层为 patch-entry 数组，entry.insert 为插入的新行列表；
+#   name 是相对**本文件所在目录**的路径，因此这里必须是 ./dist/bundle/index.js，
+#   不能用 dist/src/index.js —— 后者是 tsc 产物，纯 Node ESM 无法加载无扩展名 import）
+- insert:
+    - id: knowself
+      name: './dist/bundle/index.js'

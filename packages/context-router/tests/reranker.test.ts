@@ -32,7 +32,7 @@ function mockProvider(): ProviderAdapter {
 
 const baseConfig: RetrieverConfig = {
   enabled: true,
-  embedding_model_id: "Xenova/bge-small-zh-v1.5",
+  embedding_model_id: "qwen3-embedding:0.6b",
   embedding_cache_dir: "data/models",
   chunk_target_tokens: 256,
   chunk_overlap_tokens: 32,

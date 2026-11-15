@@ -46,6 +46,7 @@ function ensureSourcesStatusConstraint(raw: DatabaseInstance): void {
     raw.exec(`
       CREATE TABLE sources_new (
         id                  TEXT    PRIMARY KEY,
+        idempotency_key     TEXT,
         kind                TEXT    NOT NULL CHECK (kind IN ('file','url','paste')),
         original_name       TEXT    NOT NULL DEFAULT '',
         mime_type           TEXT    NOT NULL,
@@ -64,10 +65,10 @@ function ensureSourcesStatusConstraint(raw: DatabaseInstance): void {
       );
 
       INSERT INTO sources_new
-        (id, kind, original_name, mime_type, file_path, url, extracted_text, truncated,
+        (id, idempotency_key, kind, original_name, mime_type, file_path, url, extracted_text, truncated,
          char_count, user_note, user_tags, status, metadata, created_at, last_ingested_at, last_error)
       SELECT
-        id, kind, original_name, mime_type, file_path, url, extracted_text, truncated,
+        id, idempotency_key, kind, original_name, mime_type, file_path, url, extracted_text, truncated,
         char_count, user_note, user_tags,
         CASE status WHEN 'ingested' THEN 'pending_review' ELSE status END,
         metadata, created_at, last_ingested_at, last_error
@@ -77,6 +78,8 @@ function ensureSourcesStatusConstraint(raw: DatabaseInstance): void {
       ALTER TABLE sources_new RENAME TO sources;
       CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status);
       CREATE INDEX IF NOT EXISTS idx_sources_created_at ON sources(created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_idempotency_key
+        ON sources(idempotency_key) WHERE idempotency_key IS NOT NULL;
     `);
   } finally {
     raw.pragma("foreign_keys = ON");
@@ -88,7 +91,15 @@ function ensureSourcesStatusConstraint(raw: DatabaseInstance): void {
  * `ProposalTargetKindSchema` 同集合）。V3 授权允许「加枚举值」
  * （`docs/shared/current/当前锁定范围与禁止主动重构清单.md`）。
  */
-const PROPOSAL_TARGET_KINDS = ["core", "card_section", "journal", "chat_message"] as const;
+const PROPOSAL_TARGET_KINDS = [
+  "core",
+  "card_section",
+  "journal",
+  "chat_message",
+  "source_distill",
+] as const;
+
+const PROPOSAL_STATUSES = ["pending", "processing", "accepted", "edited", "rejected"] as const;
 
 /** 生成 CHECK 里的取值列表；仅供本文件的迁移使用。 */
 function sqlStringList(values: readonly string[]): string {
@@ -96,7 +107,7 @@ function sqlStringList(values: readonly string[]): string {
 }
 
 /**
- * 把 `ingestion_proposals.target_kind` 的 CHECK 从 3 值放宽到 4 值（增加 `chat_message`）。
+ * Expands target and status CHECK constraints without changing proposal rows.
  *
  * 语义：**只放宽、不收窄**——列定义 / 默认值 / NOT NULL / 外键 / 列顺序一律照抄旧定义，
  * 不删行、不改行、不改其它列语义。
@@ -105,12 +116,12 @@ function sqlStringList(values: readonly string[]): string {
  * 一致性：重建后校验 `COUNT(*)` 前后相等，且 `PRAGMA foreign_key_check` 为空，否则回滚并抛
  * `DbCorruptError`。索引从 `sqlite_master` 读出旧 DDL 后原样重放（不手抄索引名，防漏）。
  */
-function ensureProposalTargetKindConstraint(raw: DatabaseInstance): void {
+function ensureProposalConstraints(raw: DatabaseInstance): void {
   const row = raw
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ingestion_proposals'")
     .get() as { sql: string } | undefined;
   if (row === undefined) return; // 表尚未建立（DDL 已先执行，正常不会走到这里）
-  if (row.sql.includes("'chat_message'")) return; // 幂等：已升级
+  if (row.sql.includes("'source_distill'") && row.sql.includes("'processing'")) return;
 
   const indexSql = (
     raw
@@ -140,7 +151,7 @@ function ensureProposalTargetKindConstraint(raw: DatabaseInstance): void {
         reasoning               TEXT    NOT NULL DEFAULT '',
         source_excerpts         TEXT    NOT NULL DEFAULT '[]',
         produced_by_provider    TEXT    NOT NULL,
-        status                  TEXT    NOT NULL CHECK (status IN ('pending','accepted','edited','rejected')),
+        status                  TEXT    NOT NULL CHECK (status IN (${sqlStringList(PROPOSAL_STATUSES)})),
         user_edited_body        TEXT,
         created_at              TEXT    NOT NULL,
         decided_at              TEXT,
@@ -194,10 +205,16 @@ export function openProfileDb(dbPath: string): ProfileDb {
   }
 
   // 轻量迁移：补齐旧库缺少的列 / 放宽 CHECK 枚举（必须在 schema_version 校验之前）
-  ensureColumns(raw, "sources", [{ name: "last_error", type: "TEXT" }]);
+  ensureColumns(raw, "sources", [
+    { name: "last_error", type: "TEXT" },
+    { name: "idempotency_key", type: "TEXT" },
+  ]);
+  raw.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_idempotency_key ON sources(idempotency_key) WHERE idempotency_key IS NOT NULL",
+  );
   ensureSourcesStatusConstraint(raw);
   try {
-    ensureProposalTargetKindConstraint(raw);
+    ensureProposalConstraints(raw);
   } catch (cause) {
     // 迁移失败已回滚；关闭句柄再抛，避免把半开连接泄漏给调用方
     raw.close();

@@ -1,0 +1,93 @@
+{
+  "name": "@knowself/dsh-plugin",
+  "version": "0.5.2",
+  "private": true,
+  "type": "module",
+  "main": "dist/bundle/index.js",
+  "exports": {
+    ".": "./dist/bundle/index.js",
+    "./client": {
+      "default": "./dist/client-bundle/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/bundle",
+    "dist/client-bundle/client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web",
+      "external": [
+        "react",
+        "react/jsx-runtime"
+      ]
+    }
+  },
+  "description": "knowSelf 作为 deepseek-harness 插件的接入包：把画像/检索/资料/多主体/挖掘/聊天摄入/图谱以工具与 UI 扩展形式植入 dsh。",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --pool=forks",
+    "build:server": "node scripts/build-server-bundle.mjs",
+    "build:client": "node scripts/build-client-bundle.mjs",
+    "build:dsh": "pnpm run build:server && pnpm run build:client",
+    "build:package": "node scripts/build-package.mjs",
+    "pack:tgz": "node scripts/build-package.mjs && npm pack",
+    "start:dsh": "node scripts/start-dsh.mjs"
+  },
+  "dependencies": {
+    "@node-rs/jieba": "1.10.4",
+    "better-sqlite3": "12.11.1",
+    "better-sqlite3-multiple-ciphers": "12.11.1",
+    "sqlite-vec": "0.1.10-alpha.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-brand": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-util-values": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "~3.19.0",
+    "@knowself/chat-ingest": "file:../../packages/chat-ingest",
+    "@knowself/config": "file:../../packages/config",
+    "@knowself/context-router": "file:../../packages/context-router",
+    "@knowself/contracts": "file:../../packages/contracts",
+    "@knowself/ingestion": "file:../../packages/ingestion",
+    "@knowself/mcp-host": "file:../../packages/mcp-host",
+    "@knowself/mining": "file:../../packages/mining",
+    "@knowself/person-store": "file:../../packages/person-store",
+    "@knowself/profile-store": "file:../../packages/profile-store",
+    "@knowself/provider-adapter": "file:../../packages/provider-adapter",
+    "@knowself/sync-provider": "file:../../packages/sync-provider",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0",
+    "zod": "^3.23.0",
+    "zod-to-json-schema": "^3.25.2"
+  }
+}

@@ -38,7 +38,30 @@ export async function runDistill(
 ): Promise<IngestResponse> {
   const startTime = Date.now();
   const now = deps.now ?? (() => new Date().toISOString());
+
+  // 0. Idempotency applies only to prior content output. A pending
+  // source_distill row is a review request and must not suppress model work.
+  //    根因：`routes/sources-write.ts` 的 createSource 内部已蒸一次，REST 再调
+  //    `POST /sources/:id/distill` 就是第二次，会产出同义重复提案。
+  const pendingBefore = listPendingProposals(deps, source.id);
+  if (req.force !== true && pendingBefore.length > 0) {
+    deps.store.sources.updateStatus(source.id, "pending_review", now());
+    return {
+      source_id: source.id,
+      produced_proposal_ids: pendingBefore.map((p) => p.id),
+      duration_ms: Date.now() - startTime,
+      token_usage: { input_tokens: 0, output_tokens: 0 },
+      reused: true,
+    };
+  }
+
   deps.store.sources.updateStatus(source.id, "distilling", now());
+
+  // force removes only pending content output. source_distill review requests
+  // are deliberately retained by the repository operation.
+  if (req.force === true && pendingBefore.length > 0) {
+    deps.store.proposals.deletePendingBySource(source.id);
+  }
 
   // 1. 选 provider
   const providerId = req.provider_id || deps.distillProviderId;
@@ -108,8 +131,35 @@ export async function runDistill(
   };
 }
 
-function listCardSummaries(store: ProfileStore): { key: string; title: string; summary: string }[] {
+/**
+ * Lists pending content proposals for a source. `source_distill` represents a
+ * review request, not prior model output, and is excluded from this gate.
+ *
+ * 防御式实现：注入的 store 若没有 `proposals.listBySource`（部分单测桩只关心
+ * `insertMany`），当作「没有 pending」处理，绝不因缺方法而炸掉蒸馏主流程。
+ *
+ * @param deps runDistill 依赖
+ * @param sourceId 资料 id
+ * @returns pending 提案列表（可能为空）
+ */
+function listPendingProposals(
+  deps: DistillDeps,
+  sourceId: string,
+): { id: string }[] {
+  const repo = deps.store.proposals as {
+    listBySource?: (id: string) => { id: string; status: string; target?: { kind?: string } }[];
+  };
+  if (typeof repo.listBySource !== "function") return [];
   try {
+    return repo
+      .listBySource(sourceId)
+      .filter((p) => p.status === "pending" && p.target?.kind !== "source_distill");
+  } catch {
+    return [];
+  }
+}
+
+function listCardSummaries(store: ProfileStore): { key: string; title: string; summary: string }[] {  try {
     return store.cards.list().map((c) => ({
       key: c.key,
       title: c.title,

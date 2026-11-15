@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { unlinkSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { DDL_STATEMENTS } from "../src/ddl";
 import { openProfileDb, type ProfileDb } from "../src/db";
@@ -26,6 +27,9 @@ describe("DDL", () => {
     expect(names).toContain("ingestion_proposals");
     expect(names).toContain("profile_sources");
     expect(names).toContain("profile_meta");
+    expect(names).toContain("wechat_assist_drafts");
+    expect(names).toContain("wechat_assist_audit");
+    expect(names).toContain("wechat_assist_send_ledger");
     db.close();
   });
 
@@ -81,6 +85,59 @@ describe("openProfileDb", () => {
       .prepare("SELECT value FROM profile_meta WHERE key = ?")
       .get("schema_version") as { value: string };
     expect(row.value).toBe("1");
+  });
+
+  it("adds idempotency_key to an existing sources table", () => {
+    const tmpDir = mkdtempSync("__test_sources_idempotency-");
+    const tmpPath = join(tmpDir, "profile.db");
+    const raw = new Database(tmpPath);
+    raw.exec(`
+      CREATE TABLE sources (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('file','url','paste')),
+        original_name TEXT NOT NULL DEFAULT '',
+        mime_type TEXT NOT NULL,
+        file_path TEXT,
+        url TEXT,
+        extracted_text TEXT NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0,
+        char_count INTEGER NOT NULL,
+        user_note TEXT NOT NULL DEFAULT '',
+        user_tags TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL CHECK (status IN ('raw','distilling','pending_review','completed','rejected','distill_failed')),
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        last_ingested_at TEXT,
+        last_error TEXT
+      );
+      INSERT INTO sources
+        (id, kind, original_name, mime_type, extracted_text, char_count, status, created_at)
+      VALUES
+        ('550e8400-e29b-41d4-a716-446655440003', 'paste', 'old', 'text/plain', 'old', 3, 'raw', '2026-01-01T00:00:00.000Z');
+    `);
+    raw.close();
+
+    try {
+      db = openProfileDb(tmpPath);
+      const columns = db.prepare("PRAGMA table_info(sources)").all() as { name: string }[];
+      expect(columns.map((column) => column.name)).toContain("idempotency_key");
+      db.prepare("UPDATE sources SET idempotency_key = ? WHERE id = ?").run(
+        "legacy:source:1",
+        "550e8400-e29b-41d4-a716-446655440003",
+      );
+      expect(
+        db.prepare("SELECT idempotency_key FROM sources WHERE id = ?").get(
+          "550e8400-e29b-41d4-a716-446655440003",
+        ),
+      ).toEqual({ idempotency_key: "legacy:source:1" });
+    } finally {
+      try {
+        db?.raw.close();
+      } catch {
+        /* already closed */
+      }
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("enables WAL mode on file-based db", () => {

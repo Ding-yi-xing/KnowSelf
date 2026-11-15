@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { scheduleAutoDistill } from "../dist/auto.js";
-import type { AutoDeps } from "../dist/auto.js";
+import { scheduleAutoDistill } from "../src/auto.js";
+import type { AutoDeps } from "../src/auto.js";
 import type { ChatHistoryMessage } from "@knowself/contracts";
 
 function makeMessages(): ChatHistoryMessage[] {

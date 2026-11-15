@@ -1,4 +1,9 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createChatMessageCommitter } from "@knowself/chat-ingest";
+import { createPersonStore } from "@knowself/person-store";
 import { createProfileStore, type ProfileStore } from "@knowself/profile-store";
 import type {
   ChatMessageCommitter,
@@ -284,5 +289,115 @@ describe("chat_message proposal — 真实 profile.sqlite", () => {
     );
     expect(store.proposals.get(PROPOSAL_ID).status).toBe("pending");
     store.close();
+  });
+
+  it("人物提交成功而 profile 决议失败后，重开两个 SQLite 重试不会重复消息", () => {
+    const dir = mkdtempSync(join(tmpdir(), "knowself-chat-proposal-recovery-"));
+    const profileDbPath = join(dir, "profile.sqlite");
+    const personsDbPath = join(dir, "persons.sqlite");
+    const openProfile = () =>
+      createProfileStore({
+        dbPath: profileDbPath,
+        sourcesDir: join(dir, "sources"),
+        exportsDir: join(dir, "exports"),
+      });
+
+    let profileStore = openProfile();
+    let personStore = createPersonStore({
+      dbPath: personsDbPath,
+      encryption: { mode: "none" },
+    });
+
+    try {
+      profileStore.sources.insert({
+        id: SOURCE_ID,
+        kind: "file",
+        original_name: "chat-export",
+        mime_type: "text/plain",
+        file_path: null,
+        url: null,
+        extracted_text: "chat export",
+        truncated: false,
+        char_count: 11,
+        user_note: "",
+        user_tags: [],
+        status: "pending_review",
+        metadata: {},
+        created_at: NOW,
+        last_ingested_at: null,
+        last_error: null,
+      });
+      profileStore.proposals.insertMany([chatProposal()]);
+
+      personStore.staging.beginBatch({
+        batch_id: BATCH_ID,
+        platform: "wechat",
+        extractor: "test",
+        tool_version: "test",
+        now: NOW,
+      });
+      personStore.staging.stageMessages({
+        batch_id: BATCH_ID,
+        conversation_id: CONV_ID,
+        now: NOW,
+        rows: chatProposal().target.message_ids.map((message_id, index) => ({
+          message_id,
+          platform: "wechat" as const,
+          sender_id: "wxid_sender",
+          sender_name: "张三",
+          role: "other" as const,
+          ts_ms: 1_000 + index,
+          msg_date: "2026-09-10",
+          content: `message ${index + 1}`,
+          content_type: "text" as const,
+          reply_to: null,
+          meta: "{}",
+        })),
+      });
+
+      const decideSpy = vi
+        .spyOn(profileStore.proposals, "decide")
+        .mockImplementation(() => {
+          throw new Error("profile decision write failed");
+        });
+      const firstCommitter = createChatMessageCommitter(personStore);
+
+      expect(() =>
+        acceptProposal(
+          { store: profileStore, now: () => NOW, chatCommitter: firstCommitter },
+          PROPOSAL_ID,
+        ),
+      ).toThrow("profile decision write failed");
+      expect(personStore.messages.count({ conversation_id: CONV_ID })).toBe(2);
+      expect(profileStore.proposals.get(PROPOSAL_ID).status).toBe("pending");
+      decideSpy.mockRestore();
+
+      // 模拟进程在跨库窗口退出：两边均关闭后重新打开，再执行同一 proposal。
+      profileStore.close();
+      personStore.close();
+      profileStore = openProfile();
+      personStore = createPersonStore({
+        dbPath: personsDbPath,
+        encryption: { mode: "none" },
+      });
+
+      const result = acceptProposal(
+        {
+          store: profileStore,
+          now: () => NOW,
+          chatCommitter: createChatMessageCommitter(personStore),
+        },
+        PROPOSAL_ID,
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(personStore.messages.count({ conversation_id: CONV_ID })).toBe(2);
+      expect(profileStore.proposals.get(PROPOSAL_ID).status).toBe("accepted");
+      expect(profileStore.sources.get(SOURCE_ID).status).toBe("completed");
+    } finally {
+      personStore.close();
+      profileStore.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

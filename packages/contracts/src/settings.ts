@@ -48,9 +48,9 @@ export const AppSectionSchema = z.object({
   /** UI 语言；目前仅 zh-CN，留 en-US 占位 V2。 */
   locale: z.enum(["zh-CN", "en-US"]).default("zh-CN"),
   theme: ThemeModeSchema.default("system"),
-  /** 启动时是否自动打开浏览器到 http://127.0.0.1:5173。 */
+  /** 历史兼容配置；当前 dsh Desktop 不使用浏览器启动开关。 */
   open_browser_on_start: z.boolean().default(true),
-  /** 服务端口（apps/server）。Vite 端口由 vite.config.ts 控制，不在这里。 */
+  /** 历史兼容配置；当前 dsh Desktop 本地服务由宿主配置。 */
   server_port: z.number().int().min(1024).max(65535).default(9527),
   /** 启用的功能开关，方便弱模型一处看全。 */
   feature_flags: z.object({
@@ -175,6 +175,58 @@ export const AutomationTaskConfigSchema = z.object({
     .default({}),
 });
 
+/** A configured user-exported WeChat directory with a stable source id. */
+export const WechatImportConfigSchema = z.object({
+  id: z
+    .string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
+    .max(64),
+  source_path: z.string().trim().min(1).max(2048),
+  source_id: z.string().trim().min(1).max(256),
+  enabled: z.boolean().default(false),
+  reader: z.enum(["txt", "json"]).default("txt"),
+  only: z.array(z.string().trim().min(1).max(256)).max(64).optional(),
+});
+
+const WechatImportConfigsSchema = z
+  .array(WechatImportConfigSchema)
+  .max(16)
+  .superRefine((entries, ctx) => {
+    const ids = new Set<string>();
+    for (const [index, entry] of entries.entries()) {
+      if (ids.has(entry.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "id"],
+          message: "wechat_imports id must be unique",
+        });
+      }
+      ids.add(entry.id);
+    }
+  });
+
+/**
+ * Desktop WeChat assistance guardrails.
+ *
+ * This config describes authorization policy only. The actual transport stays
+ * in the dsh host adapter so the domain packages never depend on WeChat or
+ * Electron APIs.
+ */
+export const WechatAssistSectionSchema = z.object({
+  /** Feature gate; disabled by default. */
+  enabled: z.boolean().default(false),
+  /** Explicit send gate; drafts remain available when this is false. */
+  send_enabled: z.boolean().default(false),
+  /** Keep every generated message as a draft until a user sends it explicitly. */
+  drafts_only: z.boolean().default(true),
+  /** Contact identifiers allowed to receive a sent message. */
+  allowlist: z.array(z.string().trim().min(1).max(256)).max(256).default([]),
+  /** Maximum successful sends in a rolling hour. */
+  max_messages_per_hour: z.number().int().min(1).max(60).default(6),
+  /** Minimum delay between successful sends. */
+  cooldown_ms: z.number().int().min(0).max(86_400_000).default(300_000),
+});
+
 /**
  * settings.automation（DESIGN-16 §8.3/§10）。
  * 默认值原则：`enabled=false` + `dry_run=true` + 每个 `task.enabled=false`
@@ -187,6 +239,8 @@ export const AutomationSectionSchema = z.object({
   dry_run: z.boolean().default(true),
   tick_ms: z.number().int().min(10_000).max(3_600_000).default(60_000),
   tasks: z.array(AutomationTaskConfigSchema).max(16).default([]),
+  wechat_imports: WechatImportConfigsSchema.default([]),
+  wechat_assist: WechatAssistSectionSchema.default({}),
   /** 空 = 不推送（只落 exports）。 */
   report_push_dir: z.string().max(512).default(""),
   alert_suppress_ms: z.number().int().min(0).max(86_400_000).default(3_600_000),
@@ -224,6 +278,27 @@ export const AutomationSectionSchema = z.object({
  *   - mcp.fetch_fallback_policy.primary_source_id / fallback_source_id 必须能在
  *     mcp_servers[] 中找到对应 id
  */
+/**
+ * 自动归档（批次 2 / B2-3）。
+ *
+ * **默认关闭**：先让人看着跑（每条仍进「待整理」），规则与阈值稳了再开。
+ * 关闭时判定结果照样入库（`suggested_target`），只是不自动采纳 —— 关掉不等于不判。
+ */
+export const AutoArchiveSectionSchema = z.object({
+  /** 总开关；false 时只记录判定、不自动采纳。 */
+  enabled: z.boolean().default(false),
+  /** 自动采纳的置信度下限（含）。 */
+  min_confidence: z.number().min(0).max(1).default(0.8),
+  /** 群聊"人多"阈值：发言人数 > 该值 → chat_only。 */
+  group_speaker_threshold: z.number().int().min(2).max(500).default(5),
+  /** 单聊"剔噪"阈值：消息数 > 该值才建档（只剔一两句寒暄，不再当主判据）。 */
+  direct_message_threshold: z.number().int().min(1).max(100000).default(3),
+  /** target=material 且被自动采纳时，是否顺带触发 distill。 */
+  auto_distill_material: z.boolean().default(true),
+  /** 是否启用 LLM 兜底（规则判不了时才调；关闭则一律进 review）。 */
+  use_llm: z.boolean().default(false),
+});
+
 export const AppSettingsSchema = z.object({
   schema_version: z.literal(1),
   app: AppSectionSchema,
@@ -236,6 +311,8 @@ export const AppSettingsSchema = z.object({
   storage: StorageSectionSchema,
   /** 自动化（DESIGN-16 §10）。**可选**：缺省 = 不启用任何任务。 */
   automation: AutomationSectionSchema.optional(),
+  /** 自动归档（批次 2）。**可选**：缺省 = 关闭（只记录判定，不自动采纳）。 */
+  auto_archive: AutoArchiveSectionSchema.optional(),
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -254,6 +331,8 @@ export const PartialAppSettingsSchema = z.object({
   storage: StorageSectionSchema.partial().optional(),
   /** 自动化（DESIGN-16 §10）；PATCH 可只传要改的键（缺省键保持原值，不注入默认）。 */
   automation: AutomationSectionSchema.partial().optional(),
+  /** 自动归档（批次 2）；同样支持只传要改的键。 */
+  auto_archive: AutoArchiveSectionSchema.partial().optional(),
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -304,6 +383,8 @@ export type ConversationSection = z.infer<typeof ConversationSectionSchema>;
 export type StorageSection = z.infer<typeof StorageSectionSchema>;
 export type AutomationSchedule = z.infer<typeof AutomationScheduleSchema>;
 export type AutomationTaskConfig = z.infer<typeof AutomationTaskConfigSchema>;
+export type WechatImportConfig = z.infer<typeof WechatImportConfigSchema>;
+export type WechatAssistSection = z.infer<typeof WechatAssistSectionSchema>;
 export type AutomationSection = z.infer<typeof AutomationSectionSchema>;
 export type AppSettings = z.infer<typeof AppSettingsSchema>;
 export type PartialAppSettings = z.infer<typeof PartialAppSettingsSchema>;

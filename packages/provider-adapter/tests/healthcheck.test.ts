@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { runHealthcheck } from "../dist/healthcheck.js";
-import { createOpenAiAdapter } from "../dist/adapter/openai.js";
+import { runHealthcheck } from "../src/healthcheck";
+import { createOpenAiAdapter } from "../src/adapter/openai";
 import type { ProviderConfig } from "@knowself/contracts";
 
 const testConfig: ProviderConfig = {

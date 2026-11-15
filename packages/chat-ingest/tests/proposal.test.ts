@@ -63,6 +63,9 @@ describe("ProposalBuilder — §6.4 分片 / §6.3 审计字段", () => {
       kind: "chat_message",
       batch_id: "10000000-0000-0000-0000-000000000001",
       conversation_id: CONV,
+      // W-31：标题随 target 持久化（落档时写 chat_conversations.title）。
+      // 断言仍然逐字段全等，只是把新增字段也纳入 —— 不是放宽，是收紧。
+      conversation_title: "张三",
       message_ids: [message(0).message_id, message(1).message_id, message(2).message_id],
       tier: "review",
       reason_codes: ["ID_FALLBACK"],
