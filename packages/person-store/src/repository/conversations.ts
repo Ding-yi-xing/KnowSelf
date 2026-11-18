@@ -23,6 +23,14 @@ export interface ConversationsRepo extends MembersRepo {
   /** `msg_count` / `first_msg_at` / `last_msg_at` 直接 COUNT/MIN/MAX，不做增量累加（§4.4 ⑤）。 */
   recomputeStats(conversationId: string, now: string): void;
   countByKind(): Record<ConversationKind, number>;
+  /**
+   * 按会话 ID 后缀修正微信会话类型：
+   * `*@chatroom` = 群聊，其余（wxid_* / @openim / gh_* / 纯 id）= 直聊。
+   *
+   * 早期导入把不少 wxid 直聊标成了 group（member_count 也异常），而 UPSERT 不改 kind，
+   * 导致错误长期保留。启动时跑一次即可自愈；未来 UPSERT 也会强制按后缀写 kind。
+   */
+  reclassifyBySuffix(now: string): { updated: number };
 }
 
 function isoOrNull(ms: number | null): string | null {
@@ -98,10 +106,18 @@ export function createConversationsRepo(db: PersonDb): ConversationsRepo {
   };
 
   const upsertFromCommit = (row: ConversationUpsert, now: string): void => {
+    // 微信的会话类型由 ID 后缀唯一决定；不要相信导出 txt 的「类型」字段
+    // （历史数据里 wxid 直聊被写成群聊，UPSERT 又不改 kind，错误会一直保留）。
+    const kind: ConversationKind =
+      row.platform === "wechat"
+        ? row.conversation_id.endsWith("@chatroom")
+          ? "group"
+          : "direct"
+        : row.kind;
     db.prepare(CONV_UPSERT).run(
       row.conversation_id,
       row.platform,
-      row.kind,
+      kind,
       row.title,
       row.owner_person_id ?? "me",
       row.member_count ?? 0,
@@ -140,6 +156,19 @@ export function createConversationsRepo(db: PersonDb): ConversationsRepo {
     return result;
   };
 
+  const reclassifyBySuffix = (now: string): { updated: number } => {
+    const result = db
+      .prepare(
+        `UPDATE chat_conversations
+            SET kind = CASE WHEN conversation_id LIKE '%@chatroom' THEN 'group' ELSE 'direct' END,
+                updated_at = ?
+          WHERE platform = 'wechat'
+            AND kind <> CASE WHEN conversation_id LIKE '%@chatroom' THEN 'group' ELSE 'direct' END`,
+      )
+      .run(now);
+    return { updated: result.changes };
+  };
+
   return {
     get,
     list,
@@ -147,6 +176,7 @@ export function createConversationsRepo(db: PersonDb): ConversationsRepo {
     upsertFromCommit,
     recomputeStats,
     countByKind,
+    reclassifyBySuffix,
     ...createMembersRepo(db),
   };
 }

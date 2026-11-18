@@ -45,13 +45,20 @@ describe("createChatImportPort", () => {
     expect(calls[0]!.url).toBe("/knowself-api/write/chat-import");
     expect(calls[0]!.init.method).toBe("POST");
     expect((calls[0]!.init.headers as Record<string, string>)["x-knowself-write"]).toBe("1");
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ reader: "txt", platform: "wechat" });
     expect(result.source_id).toBe("s1");
   });
 
-  it("非 2xx 抛错（不静默当成成功）", async () => {
-    vi.stubGlobal("fetch", async () => ({ ok: false, status: 400, json: async () => ({}) }));
+  it("非 2xx 显示安全错误体中的错误码与阶段", async () => {
+    vi.stubGlobal("fetch", async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: "导入暂不可用", code: "INGEST_FAILED", phase: "解析" }),
+    }));
     const port = createChatImportPort();
-    await expect(port.importChat({ source_path: "C:\\tmp\\a" })).rejects.toThrow("HTTP 400");
+    await expect(port.importChat({ source_path: "C:\\tmp\\a" })).rejects.toThrow(
+      "导入失败：HTTP 500：导入暂不可用 [INGEST_FAILED]（阶段：解析）",
+    );
   });
 
   it("acceptBatch 用 source_id 调批量采纳端点", async () => {

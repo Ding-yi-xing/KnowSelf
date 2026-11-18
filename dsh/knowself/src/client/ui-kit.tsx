@@ -42,11 +42,43 @@ export function PanelShell({
     <div
       {...(testId === undefined ? {} : { "data-testid": testId })}
       data-ks-panel=""
-      style={{ position: "relative", ...style }}
+      className="ks-panel-shell"
+      style={{ position: "relative", minHeight: 0, ...style }}
     >
       <style>{FOCUS_CSS}</style>
       {children}
     </div>
+  );
+}
+
+/** 面板标题区：只保留标题与右侧操作，不放英文眉题和说明性副标题。 */
+export function PanelHeading({
+  title,
+  action,
+}: {
+  title: string;
+  action?: ReactNode;
+}): ReactElement {
+  return (
+    <header
+      className="ks-panel-heading"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: SPACE.lg,
+        padding: `${SPACE.lg}px ${SPACE.xl}px`,
+        borderBottom: `1px solid ${COLORS.border}`,
+        flexShrink: 0,
+        background: COLORS.surface,
+        boxShadow: "0 1px 0 rgba(23, 32, 51, 0.02)",
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <h2 style={{ ...TYPE.panelTitle, margin: 0 }}>{title}</h2>
+      </div>
+      {action ?? null}
+    </header>
   );
 }
 

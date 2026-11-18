@@ -31,7 +31,7 @@ import "@deepseek-ai/dsh-agent";
 
 import { ensureSettingsFile } from "./bootstrap.js";
 
-import { createRealServices, type KnowselfServices } from "./services.js";
+import { createRealServices, type KnowselfServices, type DshLlmStreamLike, type DshModelSelection } from "./services.js";
 import { makeTools } from "./tools.js";
 import { registerSystemPrompt } from "./system-prompt.js";
 import { registerSettings } from "./settings-page.js";
@@ -160,7 +160,22 @@ export function apply(ctx: Context, config?: Config): void {
       }
       // MD2-4：把 persons 密钥载体模式透传给装配层（默认 auto）。
       const personsKeyMode = config?.personsKeyMode ?? "auto";
-      services = await createRealServices(rootDir, personsKeyMode);
+      // llm/agentDefaultModel 用 ctx.get 读取：不在 inject 里阻塞插件加载，缺失时自动回退。
+      const lookup = (name: string): unknown => {
+        try {
+          return (ctx as unknown as { get?: (key: string) => unknown }).get?.(name);
+        } catch {
+          return undefined;
+        }
+      };
+      const llm = lookup("llm") as DshLlmStreamLike | undefined;
+      const agentDefaultModel = lookup("agentDefaultModel") as
+        | { currentSelection(): DshModelSelection }
+        | undefined;
+      services = await createRealServices(rootDir, personsKeyMode, {
+        ...(llm === undefined ? {} : { llm }),
+        ...(agentDefaultModel === undefined ? {} : { agentDefaultModel }),
+      });
     } catch (err) {
       const log = ctx.logger("knowself");
       log.error(

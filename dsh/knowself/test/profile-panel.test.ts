@@ -78,6 +78,16 @@ function makePort(overrides: Partial<KnowselfProfilePort> = {}): KnowselfProfile
     getProfileCore: async () => CORE,
     listCards: async () => [CARD],
     getCard: async () => CARD_DETAIL,
+    saveProfileCore: async (input) => ({ ...CORE, ...input }),
+    createCard: async (input) => ({
+      card: { key: input.key, title: input.title, summary: input.summary, section_tags: input.section_tags, updated_at: "2026-11-16T00:00:00.000Z", schema_version: 1 },
+      sections: input.sections.map((section, index) => ({ id: index + 1, card_key: input.key, ...section, ord: index, updated_at: "2026-11-16T00:00:00.000Z" })),
+    }),
+    saveCard: async (_key, input) => ({
+      card: { key: input.key, title: input.title, summary: input.summary, section_tags: input.section_tags, updated_at: "2026-11-16T00:00:00.000Z", schema_version: 1 },
+      sections: input.sections.map((section, index) => ({ id: index + 1, card_key: input.key, ...section, ord: index, updated_at: "2026-11-16T00:00:00.000Z" })),
+    }),
+    deleteCard: async (key) => ({ key, deleted: true }),
     listJournalDates: async () => JOURNAL_DATES,
     getJournal: async () => JOURNAL_ENTRY,
     acceptProposal: () => Promise.reject(new Error("not used")),
@@ -99,14 +109,73 @@ describe("M3 画像面板：正常态", () => {
   it("渲染 L1 核心（显示名 / 语言 / 分区标签 / 正文 / 更新时间）与 L2 卡片目录", async () => {
     render(createElement(ProfilePanelView, { port: makePort() }));
 
+    expect(screen.getByTestId("profile-panel")).toBeDefined();
+    expect(screen.getByText("核心画像与主题卡片")).toBeDefined();
     await waitFor(() => expect(screen.getByTestId("profile-core-body")).toBeDefined());
+    expect(screen.getByLabelText("画像目录")).toBeDefined();
+    expect(screen.getByLabelText("画像详情")).toBeDefined();
     expect(screen.getByTestId("profile-core-body").textContent).toContain("后端架构");
     expect(screen.getByText("zh-CN")).toBeDefined();
     expect(screen.getByText("基本情况")).toBeDefined();
     expect(screen.getByText("2026-05-30T08:00:00.000Z")).toBeDefined();
     // 左列分组标题
     expect(screen.getByText(/L1 · 核心画像/)).toBeDefined();
-    expect(screen.getByText(/L2 · 卡片（1）/)).toBeDefined();
+    expect(screen.getByText("L2 · 主题卡片")).toBeDefined();
+  });
+
+  it("保存核心画像和创建、编辑、删除主题卡片均调用持久化端口", async () => {
+    const saveProfileCore = vi.fn(async (input) => ({ ...CORE, ...input }));
+    const createCard = vi.fn(async (input) => ({
+      card: { key: input.key, title: input.title, summary: input.summary, section_tags: input.section_tags, updated_at: "2026-11-16T00:00:00.000Z", schema_version: 1 as const },
+      sections: input.sections.map((section: { title: string; body: string }, index: number) => ({ id: index + 1, card_key: input.key, ...section, ord: index, updated_at: "2026-11-16T00:00:00.000Z" })),
+    }));
+    const saveCard = vi.fn(async (_key, input) => ({
+      card: { key: input.key, title: input.title, summary: input.summary, section_tags: input.section_tags, updated_at: "2026-11-16T00:00:00.000Z", schema_version: 1 as const },
+      sections: input.sections.map((section: { title: string; body: string }, index: number) => ({ id: index + 1, card_key: input.key, ...section, ord: index, updated_at: "2026-11-16T00:00:00.000Z" })),
+    }));
+    const deleteCard = vi.fn(async (key: string) => ({ key, deleted: true }));
+    const getCard = vi.fn(async (key: string) => key === "relationship"
+      ? {
+        card: { key: "relationship", title: "关系", summary: "互动偏好", section_tags: [], updated_at: "2026-11-16T00:00:00.000Z", schema_version: 1 as const },
+        sections: [{ id: 1, card_key: "relationship", title: "沟通", body: "重视及时回应", ord: 0, updated_at: "2026-11-16T00:00:00.000Z" }],
+      }
+      : CARD_DETAIL);
+    const port = makePort({ saveProfileCore, createCard, saveCard, deleteCard, getCard });
+    render(createElement(ProfilePanelView, { port }));
+
+    await screen.findByTestId("profile-core-body");
+    fireEvent.click(screen.getByTestId("profile-edit-core"));
+    fireEvent.change(screen.getByLabelText("正文"), { target: { value: "已手工更新的画像" } });
+    fireEvent.click(screen.getByTestId("profile-save-core"));
+    await waitFor(() => expect(saveProfileCore).toHaveBeenCalledWith(expect.objectContaining({ body: "已手工更新的画像" })));
+
+    fireEvent.click(screen.getByTestId("profile-create-card"));
+    fireEvent.change(screen.getByLabelText("Key"), { target: { value: "relationship" } });
+    fireEvent.change(screen.getByLabelText("标题"), { target: { value: "关系" } });
+    fireEvent.change(screen.getByLabelText("摘要"), { target: { value: "互动偏好" } });
+    fireEvent.change(screen.getByLabelText("分节 1 标题"), { target: { value: "沟通" } });
+    fireEvent.change(screen.getByLabelText("分节 1 正文"), { target: { value: "重视及时回应" } });
+    fireEvent.click(screen.getByTestId("profile-save-card"));
+    await waitFor(() => expect(createCard).toHaveBeenCalledWith(expect.objectContaining({ key: "relationship", title: "关系" })));
+
+    fireEvent.click(screen.getByTestId("profile-edit-card"));
+    fireEvent.change(screen.getByLabelText("摘要"), { target: { value: "已编辑摘要" } });
+    fireEvent.click(screen.getByTestId("profile-save-card"));
+    await waitFor(() => expect(saveCard).toHaveBeenCalledWith("relationship", expect.objectContaining({ summary: "已编辑摘要" })));
+
+    fireEvent.click(screen.getByTestId("profile-delete-card"));
+    fireEvent.click(screen.getByTestId("profile-delete-confirm"));
+    await waitFor(() => expect(deleteCard).toHaveBeenCalledWith("relationship"));
+  });
+
+  it("卡片标题为空时目录回退显示 key（历史卡片不再出现空白条目）", async () => {
+    const port = makePort({
+      listCards: async () => [{ ...CARD, key: "personal_info", title: "", summary: "" }],
+    });
+    render(createElement(ProfilePanelView, { port }));
+
+    const cardButton = await screen.findByRole("button", { name: "personal_info" });
+    expect(cardButton.textContent).toBe("personal_info");
   });
 
   it("点击 L2 卡片 → 右侧显示卡片摘要与 sections 正文", async () => {
@@ -180,6 +249,10 @@ describe("M3 日志面板：正常态", () => {
     );
     render(createElement(JournalPanelView, { port: makePort({ getJournal }) }));
 
+    expect(screen.getByTestId("journal-panel")).toBeDefined();
+    expect(screen.getByLabelText("日志日期")).toBeDefined();
+    expect(screen.getByLabelText("日志记录")).toBeDefined();
+    await waitFor(() => expect(screen.getByText("日期目录")).toBeDefined());
     await waitFor(() => expect(screen.getByText(/REST 路由拆分/)).toBeDefined());
     expect(getJournal).toHaveBeenCalledWith("2026-05-30");
     expect(screen.getByText(/#1 · 2026-05-30T08:00:00.000Z · ui/)).toBeDefined();

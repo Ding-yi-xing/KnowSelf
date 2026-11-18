@@ -18,6 +18,7 @@
  *   - 摄入层未装配 → 503 degraded(layer="ingestion")
  */
 import type { KnowselfServices } from "../services.js";
+import { scheduleGraphRefresh } from "../graph-refresh.js";
 import { BadRequestError, degradedBody, sanitizeReason, type DispatchResult } from "./http.js";
 
 /**
@@ -124,6 +125,11 @@ async function decideOne(
       source_id: knownSourceId(pending),
       reason: reason ?? null,
     });
+    // 聊天消息采纳后才真正写入 persons 库；图谱快照必须跟着重算，否则会停留在
+    // “只有我、0 条边”的旧快照（导入时的挖掘发生在消息提交之前）。
+    if (decision === "accept" && pending.target.kind === "chat_message" && services.personStore !== undefined) {
+      scheduleGraphRefresh(services.personStore);
+    }
     return { status: 200, body: updated };
   } catch (err) {
     // 领域库的「已不是 pending」也归 409：与上面的前置检查保持同一语义

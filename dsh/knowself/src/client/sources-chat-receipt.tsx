@@ -52,13 +52,25 @@ export function SourcesChatReceipt({
   onDone,
   onGoInbox,
 }: SourcesChatReceiptProps): ReactElement {
+  const noNew =
+    receipt.proposals_created === 0 &&
+    receipt.messages.committed === 0 &&
+    receipt.auto_committed === 0;
+  const newest = receipt.wechat?.summary?.newest_message_at;
   return (
     <div data-testid="sources-chat-receipt" style={{ fontSize: 13, ...WRAP_TEXT }}>
       <p style={{ margin: "0 0 6px" }}>
-        {receipt.auto_committed > 0
-          ? `已导入并自动采纳 ${receipt.auto_committed} 条（解析 ${receipt.conversations} 个会话）`
-          : `已导入 ${receipt.messages.parsed} 条，等待确认`}
+        {noNew
+          ? `没有新增消息（已是最新${newest === undefined ? "" : `，微信数据最新到 ${newest.slice(0, 10)}`}）`
+          : receipt.auto_committed > 0
+            ? `已导入并自动采纳 ${receipt.auto_committed} 条（解析 ${receipt.conversations} 个会话）`
+            : `已导入 ${receipt.messages.parsed} 条，等待确认`}
       </p>
+      {newest !== undefined && !noNew && (
+        <p data-testid="sources-chat-newest" style={{ margin: "0 0 6px", color: PANEL_COLORS.muted }}>
+          微信数据最新到 {newest.slice(0, 10)}
+        </p>
+      )}
       {/* 归属失败如实说：这 N 条不会进入关系分析（不是"导进来了但图里没有"的黑箱） */}
       {receipt.messages.unattributed > 0 && (
         <p data-testid="sources-chat-unattributed" style={{ margin: "0 0 6px", color: PANEL_COLORS.warnText }}>
@@ -82,7 +94,7 @@ export function SourcesChatReceipt({
         </p>
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {receipt.auto_committed === 0 && acceptResult === null && (
+        {receipt.auto_committed === 0 && acceptResult === null && !noNew && (
           <button
             type="button"
             data-testid="sources-chat-accept-batch"

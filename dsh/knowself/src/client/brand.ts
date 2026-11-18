@@ -18,6 +18,14 @@ export function brandString<T extends string>(value: string): T {
   return value as T;
 }
 
+/**
+ * KnowSelf 统一入口面板 id。
+ *
+ * 人物 / 画像 / 待整理 / 日志 / 资料收进这一个主面板，用顶部 tab 切换；侧栏只
+ * 保留「KnowSelf」一个图标（加独立的知识图谱）。
+ */
+export const HUB_PANEL_ID: MainPanelId = brandString<MainPanelId>("knowself-hub");
+
 /** 人物档案面板 id（main 的 key / sidebar.panellist 的 id 共用同一字符串）。 */
 export const PERSON_PANEL_ID: MainPanelId = brandString<MainPanelId>("knowself-person");
 
@@ -38,6 +46,9 @@ export const SOURCES_PANEL_ID: MainPanelId = brandString<MainPanelId>("knowself-
 
 /** 侧栏 label 的 locale 命名空间（A2-核实.md §1.2 的 `locale: NS`）。 */
 export const KNOWSELF_LOCALE_NS = "knowself";
+
+/** 侧栏「KnowSelf」统一入口 label（locale 感知函数）。 */
+export const HUB_PANEL_LABEL = (): string => "KnowSelf";
 
 /** 侧栏「人物」label（locale 感知函数返回中文；接入 dsh locale 后可替换为 t()）。 */
 export const PERSON_PANEL_LABEL = (): string => "人物";

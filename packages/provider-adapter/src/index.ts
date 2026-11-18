@@ -24,7 +24,7 @@ export interface ProviderAdapter {
   listProviders(): ProviderConfig[];
   listHealth(): ProviderHealth[];
   pickProvider(purpose: ProviderPurpose): ProviderConfig | null;
-  chat(opts: ChatOptions): AsyncIterable<ChatChunk>;
+  chat(opts: ChatOptions, signal?: AbortSignal): AsyncIterable<ChatChunk>;
   runWithTools(opts: ChatOptions, signal?: AbortSignal): AsyncIterable<ChatChunk>;
   requestStructured(req: {
     provider_id: string;
@@ -95,8 +95,8 @@ export function createProviderAdapter(opts: {
     listHealth: () => registry.listHealth(),
     pickProvider: (p: ProviderPurpose) => registry.pickProvider(p),
 
-    chat(opts) {
-      return doChat({ registry, fetchImpl }, opts);
+    chat(opts, signal) {
+      return doChat({ registry, fetchImpl }, opts, signal);
     },
     runWithTools(opts, signal) {
       return runWithTools(

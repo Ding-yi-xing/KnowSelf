@@ -14,7 +14,7 @@
  *
  * **只读**：没有「追加日志」入口（写操作由 agent 工具承担）。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import type { JournalDateSummary, JournalEntryStored } from "@knowself/contracts";
 import {
@@ -33,6 +33,8 @@ import {
   TagChips,
   WRAP_TEXT,
 } from "./panel-states.js";
+import { PanelHeading, PanelShell, useContainerWidth } from "./ui-kit.js";
+import { NARROW_BREAKPOINT, RADIUS, SPACE, TYPE } from "./ui-tokens.js";
 
 /** 组件 props。 */
 export interface JournalPanelViewProps {
@@ -52,6 +54,8 @@ type PanelFailure =
  * 默认选中最新一天，打开面板即有内容。
  */
 export function JournalPanelView({ port }: JournalPanelViewProps): ReactElement {
+  const layoutRef = useRef<HTMLDivElement | null>(null);
+  const narrow = useContainerWidth(layoutRef) < NARROW_BREAKPOINT;
   const [dates, setDates] = useState<JournalDateSummary[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [entry, setEntry] = useState<JournalEntryStored | null>(null);
@@ -123,128 +127,159 @@ export function JournalPanelView({ port }: JournalPanelViewProps): ReactElement 
   }, [port, selectedDate, toFailure]);
 
   return (
-    <div
+    <PanelShell
+      testId="journal-panel"
       style={{
         display: "flex",
+        flexDirection: "column",
         height: "100%",
         minHeight: 0,
         fontFamily: "system-ui, sans-serif",
         color: PANEL_COLORS.text,
-        background: PANEL_COLORS.surface,
+        background: PANEL_COLORS.subtleBg,
       }}
     >
-      {/* 左：日期列表 */}
-      <aside
+      <PanelHeading title="日志" />
+      <div
+        ref={layoutRef}
         style={{
-          width: 220,
-          minWidth: 180,
-          flexShrink: 0,
-          borderRight: `1px solid ${PANEL_COLORS.border}`,
-          overflowY: "auto",
-          padding: 12,
+          display: "flex",
+          flex: 1,
+          minHeight: 0,
+          flexDirection: narrow ? "column" : "row",
+          margin: SPACE.xl,
+          overflow: "hidden",
+          border: `1px solid ${PANEL_COLORS.border}`,
+          borderRadius: RADIUS.card,
+          background: PANEL_COLORS.surface,
+          boxShadow: "0 8px 28px rgba(23, 32, 51, 0.05)",
         }}
       >
-        <h2 style={{ fontSize: 15, margin: "4px 0 12px" }}>日志</h2>
+        <aside
+          aria-label="日志日期"
+          style={{
+            width: narrow ? "auto" : 220,
+            minWidth: narrow ? 0 : 180,
+            maxHeight: narrow ? 220 : "none",
+            flexShrink: 0,
+            borderRight: narrow ? "none" : `1px solid ${PANEL_COLORS.border}`,
+            borderBottom: narrow ? `1px solid ${PANEL_COLORS.border}` : "none",
+            overflowY: "auto",
+            padding: SPACE.lg,
+            background: PANEL_COLORS.surface,
+          }}
+        >
+        <div style={{ padding: `${SPACE.xs}px ${SPACE.sm}px ${SPACE.md}px`, marginBottom: SPACE.sm, borderBottom: `1px solid ${PANEL_COLORS.border}` }}>
+          <h3 style={{ ...TYPE.section, margin: 0 }}>日期目录</h3>
+        </div>
 
-        {failure !== null && failure.kind === "degraded" && (
-          <DegradedNotice
-            reason={failure.reason}
-            onRetry={() => setReloadToken((n) => n + 1)}
-            testId="journal-panel-degraded"
-          />
-        )}
-        {failure !== null && failure.kind === "session" && (
-          <SessionExpiredNotice testId="journal-panel-session-expired" />
-        )}
-        {failure !== null && failure.kind === "error" && (
-          <ErrorNotice message={failure.message} testId="journal-panel-error" />
-        )}
+          {failure !== null && failure.kind === "degraded" && (
+            <DegradedNotice
+              reason={failure.reason}
+              onRetry={() => setReloadToken((n) => n + 1)}
+              testId="journal-panel-degraded"
+            />
+          )}
+          {failure !== null && failure.kind === "session" && (
+            <SessionExpiredNotice testId="journal-panel-session-expired" />
+          )}
+          {failure !== null && failure.kind === "error" && (
+            <ErrorNotice message={failure.message} testId="journal-panel-error" />
+          )}
 
-        {loading && <LoadingNotice />}
-        {!loading && dates.length === 0 && <EmptyNotice text="暂无日志日期。" />}
+          {loading && <LoadingNotice />}
+          {!loading && dates.length === 0 && <EmptyNotice text="暂无日志日期。" />}
 
-        <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-          {dates.map((row) => {
-            const active = row.date === selectedDate;
-            return (
-              <li key={row.date} style={{ marginBottom: 4 }}>
-                <button
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setSelectedDate(row.date)}
-                  style={{
-                    width: "100%",
-                    textAlign: "left",
-                    cursor: "pointer",
-                    border: "1px solid",
-                    borderColor: active ? PANEL_COLORS.accent : PANEL_COLORS.border,
-                    background: active ? PANEL_COLORS.accentBg : PANEL_COLORS.surface,
-                    borderRadius: 6,
-                    padding: "6px 8px",
-                    color: PANEL_COLORS.text,
-                  }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{row.date}</div>
-                  <div style={{ fontSize: 11, color: PANEL_COLORS.muted }}>
-                    {row.record_count} 条记录
-                  </div>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </aside>
-
-      {/* 右：记录列表 */}
-      <section style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: 16 }}>
-        {selectedDate === null ? (
-          <EmptyNotice text="从左侧选择一个日期查看日志。" />
-        ) : (
-          <>
-            <h2 style={{ fontSize: 17, margin: "0 0 4px" }}>{selectedDate}</h2>
-            <p style={{ fontSize: 12, color: PANEL_COLORS.muted, margin: "0 0 12px" }}>
-              共 {entry === null ? 0 : entry.records.length} 条记录
-            </p>
-            {detailLoading && <LoadingNotice text="读取记录中…" />}
-            {!detailLoading && entry !== null && entry.records.length === 0 && (
-              <EmptyNotice text="这一天没有日志记录。" />
-            )}
-            {entry !== null &&
-              entry.records.map((record) => (
-                <article
-                  key={record.id}
-                  style={{
-                    border: `1px solid ${PANEL_COLORS.border}`,
-                    borderRadius: 6,
-                    padding: 10,
-                    marginBottom: 10,
-                  }}
-                >
-                  <div style={{ fontSize: 12, color: PANEL_COLORS.muted, marginBottom: 6 }}>
-                    #{record.ordinal} · {record.recorded_at} · {record.provenance}
-                  </div>
-                  <div
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {dates.map((row) => {
+              const active = row.date === selectedDate;
+              return (
+                <li key={row.date} style={{ marginBottom: SPACE.xs }}>
+                  <button
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setSelectedDate(row.date)}
                     style={{
-                      fontSize: 13,
-                      lineHeight: 1.7,
-                      background: PANEL_COLORS.subtleBg,
-                      borderRadius: 4,
-                      padding: 8,
-                      ...WRAP_TEXT,
+                      width: "100%",
+                      textAlign: "left",
+                      cursor: "pointer",
+                      border: "1px solid",
+                      borderColor: active ? PANEL_COLORS.accent : PANEL_COLORS.border,
+                      background: active ? PANEL_COLORS.accentBg : PANEL_COLORS.surface,
+                      borderRadius: RADIUS.control,
+                      padding: `${SPACE.sm}px`,
+                      color: PANEL_COLORS.text,
                     }}
                   >
-                    {record.body === "" ? "—" : record.body}
-                  </div>
-                  {record.tags.length > 0 && (
-                    <div style={{ marginTop: 6 }}>
-                      <InfoField label="标签" value={<TagChips tags={record.tags} />} />
+                    <div style={{ ...TYPE.section }}>{row.date}</div>
+                    <div style={{ ...TYPE.meta, color: PANEL_COLORS.muted }}>
+                      {row.record_count} 条记录
                     </div>
-                  )}
-                </article>
-              ))}
-          </>
-        )}
-      </section>
-    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </aside>
+
+        <section
+          aria-label="日志记录"
+          style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: SPACE.xl, background: PANEL_COLORS.subtleBg }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: SPACE.md, marginBottom: SPACE.lg }}>
+            <div style={{ fontSize: 13, fontWeight: 650 }}>当日记录</div>
+            {selectedDate !== null && <span style={{ fontSize: 11, color: PANEL_COLORS.muted }}>{selectedDate}</span>}
+          </div>
+          {selectedDate === null ? (
+            <EmptyNotice text="从左侧选择一个日期查看日志。" />
+          ) : (
+            <>
+              <h2 style={{ ...TYPE.panelTitle, margin: `0 0 ${SPACE.xs}px` }}>{selectedDate}</h2>
+              <p style={{ ...TYPE.meta, color: PANEL_COLORS.muted, margin: `0 0 ${SPACE.md}px` }}>
+                共 {entry === null ? 0 : entry.records.length} 条记录
+              </p>
+              {detailLoading && <LoadingNotice text="读取记录中…" />}
+              {!detailLoading && entry !== null && entry.records.length === 0 && (
+                <EmptyNotice text="这一天没有日志记录。" />
+              )}
+              {entry !== null &&
+                entry.records.map((record) => (
+                  <article
+                    key={record.id}
+                    style={{
+                      border: `1px solid ${PANEL_COLORS.border}`,
+                      borderRadius: RADIUS.card,
+                      padding: SPACE.lg,
+                      marginBottom: SPACE.md,
+                      background: PANEL_COLORS.surface,
+                      boxShadow: "0 3px 12px rgba(23, 32, 51, 0.035)",
+                    }}
+                  >
+                    <div style={{ ...TYPE.meta, color: PANEL_COLORS.muted, marginBottom: SPACE.sm }}>
+                      #{record.ordinal} · {record.recorded_at} · {record.provenance}
+                    </div>
+                    <div
+                      style={{
+                        ...TYPE.body,
+                        background: PANEL_COLORS.subtleBg,
+                        borderRadius: RADIUS.control,
+                        padding: SPACE.sm,
+                        ...WRAP_TEXT,
+                      }}
+                    >
+                      {record.body === "" ? "—" : record.body}
+                    </div>
+                    {record.tags.length > 0 && (
+                      <div style={{ marginTop: SPACE.sm }}>
+                        <InfoField label="标签" value={<TagChips tags={record.tags} />} />
+                      </div>
+                    )}
+                  </article>
+                ))}
+            </>
+          )}
+        </section>
+      </div>
+    </PanelShell>
   );
 }

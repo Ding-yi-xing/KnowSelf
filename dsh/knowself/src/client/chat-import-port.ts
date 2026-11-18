@@ -31,8 +31,17 @@ export type ChatImportPlatform = (typeof CHAT_IMPORT_PLATFORMS)[number];
 
 /** 导入请求体（与 `routes/chat-import.ts` 对齐）。 */
 export interface ChatImportRequest {
-  /** 导出产物目录（本地路径）。 */
-  source_path: string;
+  /** 导出产物目录（本地路径）。与 `wechat_root` 二选一。 */
+  source_path?: string;
+  /** 微信 `xwechat_files` 目录：由 dsh 内部取密钥/解密/导出后再导入。 */
+  wechat_root?: string;
+  /**
+   * @deprecated 2026-11-17 起无效：密钥改为从运行中的微信进程只读提取，
+   * 不再需要退出/重启微信。保留字段仅为兼容旧调用方。
+   */
+  capture_key?: boolean;
+  /** Reader for the official spike TXT export. */
+  reader?: "txt" | "json";
   /**
    * 导出产物的来源平台（W-34-T02）。
    *
@@ -68,12 +77,26 @@ export interface ChatImportResult {
   persons_created: number;
   /** 自动采纳条数（`auto_commit=false` 时为 0）。 */
   auto_committed: number;
+  /** 本次导入产生的 proposal 数（0 = 没有新增/无需确认）。 */
+  proposals_created?: number;
+  /** 微信内建解密的摘要（只含目录、密钥来源与导出统计，不含密钥）。 */
+  wechat?: {
+    db_dir: string;
+    key_source: "live" | "reused" | "captured";
+    summary?: { newest_message_at?: string; txt_count?: number };
+  };
   /** 实际落库的消息数（采纳 1 条 proposal 可能带入多条消息）。 */
   messages_committed?: number;
   snapshot_id: string | null;
   nodes: number | null;
   edges: number | null;
   mining_warning?: string;
+  reply_index_sync?: {
+    state: "ready" | "unavailable" | "failed";
+    conversations: number;
+    indexed_messages: number;
+    warning?: string;
+  };
 }
 
 /** 批量采纳回包。 */
@@ -94,6 +117,57 @@ export interface ChatImportPort {
 const WRITE_HEADERS = { "content-type": "application/json", "x-knowself-write": "1" } as const;
 
 /**
+ * 需要用户先去登录/打开微信时抛出（服务端 409 `WECHAT_KEY_REQUIRED`）。
+ *
+ * 2026-11-17 起**不再**弹「重启微信抓密钥」确认框：服务端改为从运行中的微信进程
+ * 只读密钥，这里只负责把可操作的中文原因显示给用户（例如「请先登录微信」）。
+ */
+export class WechatKeyRequiredError extends Error {
+  readonly code = "WECHAT_KEY_REQUIRED" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WechatKeyRequiredError";
+  }
+}
+
+/** 读取服务端错误体（保留 code，供面板区分可恢复错误）。 */
+async function readErrorBody(res: Response): Promise<{ message: string; code?: string; phase?: string; recoverable?: boolean }> {
+  let message = "";
+  let code: string | undefined;
+  let phase: string | undefined;
+  let recoverable: boolean | undefined;
+  try {
+    const body: unknown = await res.json();
+    if (body !== null && typeof body === "object") {
+      const value = body as Record<string, unknown>;
+      message = typeof value.error === "string"
+        ? value.error
+        : typeof value.reason === "string" ? value.reason : "";
+      code = typeof value.code === "string" ? value.code : undefined;
+      phase = typeof value.phase === "string" ? value.phase : undefined;
+      recoverable = value.recoverable === true ? true : undefined;
+    }
+  } catch {
+    // Preserve the HTTP status when the server returned a non-JSON body.
+  }
+  return {
+    message: message === "" ? `HTTP ${res.status}` : `HTTP ${res.status}：${message}`,
+    ...(code === undefined ? {} : { code }),
+    ...(phase === undefined ? {} : { phase }),
+    ...(recoverable === undefined ? {} : { recoverable }),
+  };
+}
+
+async function readError(res: Response, operation: string): Promise<Error> {
+  const body = await readErrorBody(res);
+  if (body.code === "WECHAT_KEY_REQUIRED") return new WechatKeyRequiredError(body.message);
+  const code = body.code === undefined ? "" : ` [${body.code}]`;
+  const phase = body.phase === undefined ? "" : `（阶段：${body.phase}）`;
+  return new Error(`${operation}失败：${body.message}${code}${phase}`);
+}
+
+/**
  * 构造 REST 端口。
  * @param baseUrl REST 前缀，默认同 origin `/knowself-api`
  * @returns 聊天导入端口
@@ -104,13 +178,13 @@ export function createChatImportPort(baseUrl = "/knowself-api"): ChatImportPort 
       // platform 显式放在最后并给缺省值：若写成 `{ platform: "wechat", ...req }`，
       // 当 req.platform 是 undefined 时展开会把它覆盖回 undefined，JSON.stringify 又会丢掉
       // 该键 —— 结果服务端收不到字段，等于"缺省"这个约定失效。
-      const payload = { ...req, platform: req.platform ?? "wechat" };
+      const payload = { ...req, reader: req.reader ?? "txt", platform: req.platform ?? "wechat" };
       const res = await fetch(`${baseUrl}/write/chat-import`, {
         method: "POST",
         headers: WRITE_HEADERS,
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error(`导入失败：HTTP ${res.status}`);
+      if (!res.ok) throw await readError(res, "导入");
       return (await res.json()) as ChatImportResult;
     },
     async acceptBatch(sourceId: string): Promise<AcceptBatchResult> {
@@ -119,7 +193,7 @@ export function createChatImportPort(baseUrl = "/knowself-api"): ChatImportPort 
         headers: WRITE_HEADERS,
         body: JSON.stringify({ source_id: sourceId, reason: "ui-accept-batch" }),
       });
-      if (!res.ok) throw new Error(`批量采纳失败：HTTP ${res.status}`);
+      if (!res.ok) throw await readError(res, "批量采纳");
       return (await res.json()) as AcceptBatchResult;
     },
   };

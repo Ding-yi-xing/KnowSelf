@@ -36,7 +36,7 @@ export const RADIUS = { card: 8, control: 6, pill: 999 } as const;
  * 键名是语义不是尺寸，方便以后整体调；但字号就是 15/13/13/12，不要再加第 5 级。
  */
 export const TYPE = {
-  panelTitle: { fontSize: 15, fontWeight: 600 as const, lineHeight: 1.4 },
+  panelTitle: { fontSize: 18, fontWeight: 650 as const, lineHeight: 1.35 },
   section: { fontSize: 13, fontWeight: 600 as const, lineHeight: 1.5 },
   body: { fontSize: 13, fontWeight: 400 as const, lineHeight: 1.6 },
   meta: { fontSize: 12, fontWeight: 500 as const, lineHeight: 1.5 },
@@ -46,19 +46,19 @@ export const TYPE = {
  * 颜色（对比度见文件头注；`muted`/`subtle` 都过 4.5:1，不只过 3:1）。
  */
 export const COLORS = {
-  text: "#111827",
+  text: "#172033",
   /** 次要正文（8.6:1）。 */
-  muted: "#4b5563",
+  muted: "#526078",
   /** 辅助信息（5.9:1）。 */
-  subtle: "#6b7280",
-  border: "#e5e7eb",
-  borderStrong: "#d1d5db",
+  subtle: "#6d7890",
+  border: "#dfe6ef",
+  borderStrong: "#c5d0df",
   surface: "#ffffff",
-  surfaceAlt: "#f9fafb",
+  surfaceAlt: "#f4f7fb",
   /** hover 背景（与 surface 有可见差，但不抢注意力）。 */
-  hover: "#f3f4f6",
-  accent: "#1d4ed8",
-  accentSoft: "#eff6ff",
+  hover: "#edf4f5",
+  accent: "#0f766e",
+  accentSoft: "#e7f5f2",
   warnBg: "#fffbeb",
   warnBorder: "#fcd34d",
   warnText: "#92400e",
@@ -117,7 +117,7 @@ export const FOCUS_CSS = `
   width: 14px;
   height: 14px;
   border: 2px solid #d1d5db;
-  border-top-color: #1d4ed8;
+  border-top-color: ${COLORS.accent};
   border-radius: 999px;
   animation: ks-spin 800ms linear infinite;
 }
@@ -125,8 +125,17 @@ export const FOCUS_CSS = `
   [data-ks-panel] .ks-spinner { animation: none; }
 }
 @media (prefers-reduced-motion: no-preference) {
-  [data-ks-panel] button, [data-ks-panel] article { transition: background-color 120ms ease, border-color 120ms ease; }
+  [data-ks-panel] button, [data-ks-panel] article { transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
 }
+[data-ks-panel] {
+  background: ${COLORS.surfaceAlt};
+}
+[data-ks-panel] input {
+  background: ${COLORS.surface};
+}
+[data-ks-panel] ::-webkit-scrollbar { width: 10px; height: 10px; }
+[data-ks-panel] ::-webkit-scrollbar-thumb { background: #c8d3df; border: 3px solid transparent; border-radius: 999px; background-clip: content-box; }
+[data-ks-panel] ::-webkit-scrollbar-track { background: transparent; }
 `;
 
 /**

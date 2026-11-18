@@ -34,6 +34,12 @@ export interface ReplyHistoryRepo {
     after?: { ts_ms: number; message_id: string };
     limit?: number;
   }): ReplyHistoryPage;
+  /**
+   * 取**最近** `limit` 条（内部 `ORDER BY ts_ms DESC LIMIT` 后反转为升序）。
+   * `listMessages` 是「从最早往后翻页」，会话超过 limit 时拿到的是最老的一批；
+   * 需要「最近 N 条」的场景（画像、共同记忆）必须用这个方法。
+   */
+  listRecentMessages(input: { conversation_id: string; limit?: number }): ReplyHistoryMessage[];
 }
 
 export function createReplyHistoryRepo(db: PersonDb): ReplyHistoryRepo {
@@ -136,5 +142,41 @@ export function createReplyHistoryRepo(db: PersonDb): ReplyHistoryRepo {
     };
   };
 
-  return { listDirectConversations, listMessages };
+  const listRecentMessages = (input: { conversation_id: string; limit?: number }): ReplyHistoryMessage[] => {
+    const limit = Math.max(1, Math.min(input.limit ?? 200, 1000));
+    const rows = db
+      .prepare(
+        `SELECT m.message_id, m.conversation_id, m.sender_id, m.sender_person_id,
+                m.role, m.ts_ms, m.msg_date, m.content, m.content_type
+           FROM v_chat_messages m
+          WHERE m.conversation_id = ?
+            AND m.conversation_id IN (
+              SELECT c.conversation_id
+                FROM chat_conversations c
+                JOIN chat_members self_member
+                  ON self_member.conversation_id = c.conversation_id
+                 AND self_member.is_active = 1
+                 AND self_member.person_id = 'me'
+                JOIN chat_members contact_member
+                  ON contact_member.conversation_id = c.conversation_id
+                 AND contact_member.is_active = 1
+                 AND contact_member.person_id <> 'me'
+                JOIN persons contact_person
+                  ON contact_person.person_id = contact_member.person_id
+                 AND contact_person.subject_kind = 'contact'
+               WHERE c.kind = 'direct'
+               GROUP BY c.conversation_id
+              HAVING COUNT(DISTINCT contact_member.person_id) = 1
+            )
+            AND m.role <> 'system'
+            AND m.content IS NOT NULL
+            AND m.content <> ''
+          ORDER BY m.ts_ms DESC, m.message_id DESC
+          LIMIT ?`,
+      )
+      .all(input.conversation_id, limit) as ReplyHistoryMessage[];
+    return rows.reverse();
+  };
+
+  return { listDirectConversations, listMessages, listRecentMessages };
 }

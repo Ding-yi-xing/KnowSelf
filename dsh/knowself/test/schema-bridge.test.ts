@@ -164,7 +164,7 @@ describe("T02 / S1~S6：zodToJsonSchema 宽松优先降维", () => {
   });
 });
 
-describe("T02 / S7：真实 dsh 校验器全量实测（16 工具 + INGEST_PARAMETERS）", () => {
+describe("T02 / S7：真实 dsh 校验器全量实测（17 工具 + INGEST_PARAMETERS）", () => {
   it("INGEST_PARAMETERS 通过 assertSupportedJsonSchema，且 oneOf.length === 3", () => {
     expect(() => assertSupportedJsonSchema(INGEST_PARAMETERS)).not.toThrow();
     expect(INGEST_PARAMETERS.oneOf).toHaveLength(3);
@@ -178,10 +178,10 @@ describe("T02 / S7：真实 dsh 校验器全量实测（16 工具 + INGEST_PARAM
     );
   });
 
-  it("16 个工具 parameters 全量通过 assertSupportedJsonSchema 且均非空", () => {
+  it("17 个工具 parameters 全量通过 assertSupportedJsonSchema 且均非空", () => {
     // makeTools 只构造 ToolDefinition，run 闭包不会执行，传空桩即可。
     const tools = makeTools({} as KnowselfServices);
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(17);
     for (const tool of tools) {
       const keys = Object.keys(tool.parameters as Record<string, unknown>);
       expect(keys.length, `${tool.name} parameters 不应为空`).toBeGreaterThan(0);

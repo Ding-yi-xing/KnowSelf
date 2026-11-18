@@ -22,8 +22,15 @@
  *   - 其它取值（如 `L9`）→ **400** `{error:<message>}`（沿用既有 `BadRequestError` 风格）。
  * 这样「L1 在哪里」有唯一答案（`/profile/core`），客户端不会把「层不存在」误读成「空画像」。
  */
-import type { CardSummary } from "@knowself/contracts";
-import type { ProfileStore } from "@knowself/profile-store";
+import {
+  CardInputSchema,
+  CoreProfileInputSchema,
+  type CardInput,
+  type CardSummary,
+  type CoreProfileInput,
+  type CoreProfileStored,
+} from "@knowself/contracts";
+import { ProfileNotFoundError, type ProfileStore } from "@knowself/profile-store";
 import type { KnowselfServices } from "../services.js";
 import {
   BadRequestError,
@@ -69,6 +76,31 @@ const UNSUPPORTED_LAYER: DispatchResult = {
   body: { error: "unsupported_layer", hint: "L1 由 /profile/core 提供" },
 };
 
+function parseInput<T>(result: { success: true; data: T } | { success: false }, label: string): T {
+  if (!result.success) throw new BadRequestError(`${label} 格式不合法`);
+  return result.data;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * 全新安装（从未蒸馏 / 编辑过）时的空核心画像。
+ *
+ * `core_profile` 是单行表，第一次写入前没有行；领域库 `get()` 会抛
+ * `ProfileNotFoundError`。这不该被当成服务端故障：返回 200 + 空对象，画像面板
+ * 才能显示「暂无核心画像数据」并允许用户直接编辑。
+ */
+const EMPTY_CORE: CoreProfileStored = {
+  display_name: "",
+  locale: "zh-CN",
+  section_tags: [],
+  body: "",
+  updated_at: "",
+  schema_version: 1,
+};
+
 /**
  * 处理画像三个只读端点。
  *
@@ -81,7 +113,13 @@ export function handleProfileRoute(ctx: RouteContext): DispatchResult | undefine
 
   if (path === "/profile/core" && isGet) {
     const store = requireProfileStore(services);
-    return { status: 200, body: store.core.get() };
+    try {
+      return { status: 200, body: store.core.get() };
+    } catch (error) {
+      // 未初始化 ≠ 服务端错误（2026-11-18 首次分发）：返回空核心，前端进入可编辑空态。
+      if (error instanceof ProfileNotFoundError) return { status: 200, body: EMPTY_CORE };
+      throw error;
+    }
   }
 
   if (path === "/cards" && isGet) {
@@ -104,6 +142,41 @@ export function handleProfileRoute(ctx: RouteContext): DispatchResult | undefine
     const exists = store.cards.list().some((card) => card.key === key);
     if (!exists) return { status: 404, body: { error: "not_found" } };
     return { status: 200, body: store.cards.get(key) };
+  }
+
+  if (path === "/profile/core" && method === "PATCH" && ctx.writeChannel === true) {
+    if (!isRecord(ctx.body)) throw new BadRequestError("核心画像请求体必须是对象");
+    const input = parseInput<CoreProfileInput>(CoreProfileInputSchema.safeParse(ctx.body), "核心画像");
+    const store = requireProfileStore(services);
+    store.write({ target: "core", provenance: "user", ...input }, { callerKind: "ui" });
+    return { status: 200, body: store.core.get() };
+  }
+
+  if (path === "/cards" && method === "POST" && ctx.writeChannel === true) {
+    if (!isRecord(ctx.body)) throw new BadRequestError("画像卡片请求体必须是对象");
+    const input = parseInput<CardInput>(CardInputSchema.safeParse(ctx.body), "画像卡片");
+    const store = requireProfileStore(services);
+    store.write({ target: "card", provenance: "user", ...input }, { callerKind: "ui" });
+    return { status: 201, body: store.cards.get(input.key) };
+  }
+
+  if (mCard !== null && method === "PATCH" && ctx.writeChannel === true) {
+    if (!isRecord(ctx.body)) throw new BadRequestError("画像卡片请求体必须是对象");
+    const key = decodePathSegment(mCard[1], "卡片 key");
+    const input = parseInput<CardInput>(CardInputSchema.safeParse({ ...ctx.body, key }), "画像卡片");
+    const store = requireProfileStore(services);
+    store.write({ target: "card", provenance: "user", ...input }, { callerKind: "ui" });
+    return { status: 200, body: store.cards.get(key) };
+  }
+
+  if (mCard !== null && method === "DELETE" && ctx.writeChannel === true) {
+    const key = decodePathSegment(mCard[1], "卡片 key");
+    const store = requireProfileStore(services);
+    if (!store.cards.list().some((card) => card.key === key)) {
+      return { status: 404, body: { error: "not_found" } };
+    }
+    store.cards.delete(key);
+    return { status: 200, body: { key, deleted: true } };
   }
 
   return undefined;

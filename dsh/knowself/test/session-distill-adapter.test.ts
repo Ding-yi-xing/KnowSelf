@@ -100,7 +100,7 @@ function complete(adapter: ReturnType<typeof createSessionDistillAdapter>, s: Se
 }
 
 describe("dsh session distill adapter", () => {
-  it("仅在 completed flush 时创建低置信审核提案，并对重复 flush 幂等", async () => {
+  it("仅在 completed flush 时创建 Source；不再生成低置信 source_distill 审核提案", async () => {
     const { services, insertMany, createPasteSource } = makeServices();
     const adapter = createSessionDistillAdapter(services);
     const s = session();
@@ -111,8 +111,7 @@ describe("dsh session distill adapter", () => {
 
     expect(createPasteSource).toHaveBeenCalledTimes(1);
     expect(createPasteSource.mock.calls[0]?.[0]?.idempotency_key).toBe(`dsh-session:${SESSION_ID}:1`);
-    expect(insertMany).toHaveBeenCalledTimes(1);
-    expect(insertMany.mock.calls[0]?.[0]?.[0]?.target.kind).toBe("source_distill");
+    expect(insertMany).not.toHaveBeenCalled();
   });
 
   it("显式记忆意图走自动蒸馏；摄入服务缺失时保留 Source 而不抛错", async () => {
@@ -127,6 +126,23 @@ describe("dsh session distill adapter", () => {
     await adapter.onFlush(s);
     expect(createPasteSource).toHaveBeenCalledTimes(1);
     expect(runDistill).toHaveBeenCalledTimes(1);
+  });
+
+  it("模型蒸馏出有价值提案时自动采纳；没有产出则不产生待整理", async () => {
+    const runDistill = vi.fn(async () => ({ produced_proposal_ids: ["p1", "p2"] }));
+    const acceptProposal = vi.fn();
+    const { services, createPasteSource } = makeServices({
+      ingestion: { runDistill, acceptProposal } as unknown as KnowselfServices["ingestion"],
+    });
+    const adapter = createSessionDistillAdapter(services);
+    const s = session();
+    complete(adapter, s, "我决定以后长期使用 Java 和 Spring Boot 做后端，请记住这个偏好。");
+
+    await adapter.onFlush(s);
+    expect(createPasteSource).toHaveBeenCalledTimes(1);
+    expect(runDistill).toHaveBeenCalledTimes(1);
+    expect(acceptProposal).toHaveBeenNthCalledWith(1, "p1");
+    expect(acceptProposal).toHaveBeenNthCalledWith(2, "p2");
   });
 
   it("丢弃注入内容、被中断回合和单边/寒暄回合", async () => {

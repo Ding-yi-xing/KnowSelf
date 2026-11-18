@@ -153,7 +153,8 @@ export const DDL_STATEMENTS: string[] = [
     action        TEXT NOT NULL CHECK (action IN (
       'draft_created','draft_discarded','send_rejected',
       'send_attempted','send_succeeded','send_failed',
-      'reply_task_started','reply_task_stopped','reply_task_paused'
+      'reply_task_started','reply_task_stopped','reply_task_paused',
+      'reply_context_shared'
     )),
     draft_id      TEXT NOT NULL,
     contact_id    TEXT NOT NULL,
@@ -236,6 +237,31 @@ export const DDL_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_wechat_reply_turns_task
     ON wechat_reply_turns(task_id, id)`,
 
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_wechat_reply_turns_inbound_once
+    ON wechat_reply_turns(task_id, inbound_message_id)
+    WHERE inbound_message_id IS NOT NULL`,
+
+  // 微信协助：目标人物画像 + 用户口吻画像（每个任务一份，可重算覆盖）
+  `CREATE TABLE IF NOT EXISTS wechat_reply_personas (
+    task_id        TEXT PRIMARY KEY,
+    payload_json   TEXT NOT NULL,
+    generated_at   TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES wechat_reply_tasks(id) ON DELETE CASCADE
+  )`,
+
+  // 微信协助：回复任务的跨轮记忆（已确认事实 / 已问信息点 / 进行中的话题）。
+  // 与 personas 分表：画像由模型总结生成，进度由 worker 按轮累积，生命周期与写入者都不同。
+  `CREATE TABLE IF NOT EXISTS wechat_reply_task_progress (
+    task_id          TEXT PRIMARY KEY,
+    facts_json       TEXT NOT NULL DEFAULT '[]',
+    asked_slots_json TEXT NOT NULL DEFAULT '[]',
+    stage_goal       TEXT NOT NULL DEFAULT '',
+    updated_at       TEXT NOT NULL,
+    turn_count       INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (task_id) REFERENCES wechat_reply_tasks(id) ON DELETE CASCADE
+  )`,
+
   // V2-05: 模板
   `CREATE TABLE IF NOT EXISTS templates (
     id                  TEXT PRIMARY KEY,
@@ -245,4 +271,25 @@ export const DDL_STATEMENTS: string[] = [
     variables           TEXT NOT NULL DEFAULT '[]',
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+
+  // 身份状态时间线：从聊天里挖出「我亲口说过的身份/状态变化」。
+  //
+  // 真实事故：代理先回「我早不读了」，22 秒后又回「在家待着呗 翻翻招聘信息 投简历」，
+  // 两句都是编的。静态画像只有「在读」这一句，盖不住「最近入职了/辞职了」这类时效变化。
+  //
+  // category 用来做覆盖：同一类（enrollment/work）里新状态失效旧的，不同类可以并存
+  // （「在读」+「在找工作」是同时成立的）。
+  `CREATE TABLE IF NOT EXISTS identity_states (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    category               TEXT NOT NULL CHECK (category IN ('enrollment','work','other')),
+    text                   TEXT NOT NULL,
+    source_quote           TEXT NOT NULL DEFAULT '',
+    source_conversation_id TEXT NOT NULL DEFAULT '',
+    valid_from             TEXT,
+    invalid_at             TEXT,
+    created_at             TEXT NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_identity_states_active
+    ON identity_states(invalid_at, category, created_at DESC)`,
 ];

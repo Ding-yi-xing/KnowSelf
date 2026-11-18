@@ -26,6 +26,7 @@ export interface WechatReplyTask {
   provider_id: string;
   model_id: string;
   history_authorized: boolean;
+  authorization_version?: number;
   status: WechatReplyTaskStatus;
   stop_reason: string | null;
   turn_count: number;
@@ -33,7 +34,47 @@ export interface WechatReplyTask {
   updated_at: string;
 }
 
-export interface WechatReplyProvider { id: string; label: string; model: string }
+export interface WechatTransportCapabilities {
+  available: boolean;
+  can_inspect_conversation: boolean;
+  can_list_unread: boolean;
+  can_send: boolean;
+  can_lookup_send_result: boolean;
+  transport_version: string;
+  reason?: string;
+}
+
+export interface WechatReplyPersona {
+  target: {
+    summary: string;
+    traits: string[];
+    psychology: string[];
+    communication: string[];
+    taboos: string[];
+    relationship: string;
+  };
+  voice: { tone: string; length: string; habits: string[]; addressing: string };
+  generated_at: string;
+  source_messages: number;
+  degraded: boolean;
+}
+
+export interface WechatModelOption {
+  provider: string;
+  model: string;
+  label: string;
+}
+
+export interface WechatModelCatalog {
+  models: WechatModelOption[];
+  current: { provider: string; model: string } | null;
+}
+
+export interface WechatReplyModel {
+  source: "dsh" | "knowself";
+  provider: string;
+  model: string;
+}
 
 export interface WechatAssistPort {
   listDrafts(): Promise<WechatAssistDraft[]>;
@@ -41,13 +82,18 @@ export interface WechatAssistPort {
   discardDraft(id: string): Promise<WechatAssistDraft>;
   sendDraft(id: string): Promise<WechatAssistDraft>;
   listReplyContacts(): Promise<WechatReplyContact[]>;
-  listReplyProviders(): Promise<WechatReplyProvider[]>;
   listReplyTasks(): Promise<WechatReplyTask[]>;
+  getReplyPersona(taskId: string): Promise<WechatReplyPersona | null>;
+  getTransportCapabilities(): Promise<WechatTransportCapabilities>;
+  getReplyModel(): Promise<WechatReplyModel>;
+  getReplyModels(): Promise<WechatModelCatalog>;
   startReplyTask(input: {
     conversation_id: string; contact_id: string; objective: string;
-    provider_id?: string; model_id?: string; history_authorized: boolean;
+    history_authorized: boolean;
+    provider_id?: string; model_id?: string;
   }): Promise<WechatReplyTask>;
   stopReplyTask(id: string): Promise<WechatReplyTask>;
+  revokeReplyTaskHistory(id: string): Promise<WechatReplyTask>;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -105,13 +151,25 @@ export function createRestWechatAssistPort(): WechatAssistPort {
       body: JSON.stringify({ explicit: true }),
     }),
     listReplyContacts: () => request<WechatReplyContact[]>("/wechat-assist/contacts"),
-    listReplyProviders: () => request<WechatReplyProvider[]>("/wechat-assist/providers"),
     listReplyTasks: () => request<WechatReplyTask[]>("/wechat-assist/reply-tasks"),
+    getReplyPersona: async (taskId) => {
+      try {
+        return await request<WechatReplyPersona>(`/wechat-assist/reply-tasks/${encodeURIComponent(taskId)}/persona`);
+      } catch {
+        return null;
+      }
+    },
+    getTransportCapabilities: () => request<WechatTransportCapabilities>("/wechat-assist/transport"),
+    getReplyModel: () => request<WechatReplyModel>("/wechat-assist/model"),
+    getReplyModels: () => request<WechatModelCatalog>("/wechat-assist/models"),
     startReplyTask: (input) => request<WechatReplyTask>("/write/wechat-assist/reply-tasks", {
       method: "POST", headers: writeHeaders(), body: JSON.stringify(input),
     }),
     stopReplyTask: (id) => request<WechatReplyTask>(`/write/wechat-assist/reply-tasks/${encodeURIComponent(id)}/stop`, {
       method: "POST", headers: writeHeaders(`stop:${id}`), body: JSON.stringify({}),
+    }),
+    revokeReplyTaskHistory: (id) => request<WechatReplyTask>(`/write/wechat-assist/reply-tasks/${encodeURIComponent(id)}/history/revoke`, {
+      method: "POST", headers: writeHeaders(`revoke-history:${id}`), body: JSON.stringify({}),
     }),
   };
 }

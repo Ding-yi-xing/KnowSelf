@@ -27,6 +27,7 @@ import type { CSSProperties, ReactElement } from "react";
 import type {
   PersonPanelDataPort,
   PersonPanelEvent,
+  PersonTimelineResult,
   PersonPanelRow,
 } from "./data-port.js";
 import { PersonActions } from "./person-actions.js";
@@ -46,6 +47,7 @@ import {
 import type { PersonWritePort } from "./person-write-port.js";
 import { PersonLayerDegradedError } from "./rest-data-port.js";
 import { consumeFocusedPerson, subscribeFocusedPerson } from "./panel-jump.js";
+import { GroupDirectoryView } from "./group-directory.js";
 
 /** 组件 props。 */
 export interface PersonPanelViewProps {
@@ -156,16 +158,18 @@ const ROW_CSS = `
   display: flex;
   align-items: center;
   padding: ${SPACE.md}px;
-  border: 1px solid transparent;
+  border: 1px solid ${COLORS.border};
   border-radius: ${RADIUS.card}px;
   background: ${COLORS.surface};
+  box-shadow: 0 1px 1px rgba(23, 32, 51, 0.02);
   transition: background-color 120ms ease, border-color 120ms ease;
 }
-[data-ks-panel] .ks-person-row:hover { background: ${COLORS.hover}; }
-[data-ks-panel] .ks-person-row:focus-within { background: ${COLORS.hover}; }
+[data-ks-panel] .ks-person-row:hover { background: ${COLORS.hover}; border-color: ${COLORS.borderStrong}; box-shadow: 0 6px 16px rgba(23, 32, 51, 0.06); }
+[data-ks-panel] .ks-person-row:focus-within { background: ${COLORS.hover}; border-color: ${COLORS.accent}; }
 [data-ks-panel] .ks-person-row[data-active="true"] {
   border-color: ${COLORS.accent};
   background: ${COLORS.accentSoft};
+  box-shadow: inset 3px 0 0 ${COLORS.accent};
 }
 [data-ks-panel] .ks-person-row-actions {
   position: absolute;
@@ -219,12 +223,13 @@ function formatRecentMessageAt(iso: string | null): string {
   return `${monthDay} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** 列表行第二行文案：`消息数 · 最近时间`，同一个意思只说一次（0 条 → 只显示「无消息」）。 */
+/** 列表行第二行文案：`消息数 · 最近时间`（只算直聊；群消息不计入个人档案）。 */
 function formatRowMeta(row: PersonPanelRow): string {
-  if (row.msg_count === 0) return "无消息";
-  const recent = formatRecentMessageAt(row.last_msg_at);
-  if (recent === "无消息") return `${row.msg_count} 条消息`;
-  return `${row.msg_count} 条消息 · ${recent}`;
+  const msgs = row.direct_msg_count ?? row.msg_count;
+  if (msgs === 0) return "无直聊消息";
+  const recent = formatRecentMessageAt(row.direct_last_msg_at ?? row.last_msg_at);
+  if (recent === "无消息") return `${msgs} 条直聊消息`;
+  return `${msgs} 条直聊消息 · ${recent}`;
 }
 
 /** 备注字符串 → 标签数组（分隔符：中英文逗号 / 顿号 / 分号 / 换行；空串过滤）。 */
@@ -249,7 +254,7 @@ function splitTags(remark: string): string[] {
  * @param maxMsgs 当前列表里最大消息数（条宽归一化基准）
  */
 function strengthOf(row: PersonPanelRow, maxMsgs: number): { label: string; widthPct: number } {
-  const msgs = row.msg_count;
+  const msgs = row.direct_msg_count ?? row.msg_count;
   let label: string;
   if (row.display_name.startsWith("未识别") || msgs < 100) label = "待认领";
   else if (msgs >= 10000) label = "核心";
@@ -296,7 +301,7 @@ export function PersonPanelView({
   const [persons, setPersons] = useState<PersonPanelRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PersonPanelRow | null>(null);
-  const [timeline, setTimeline] = useState<PersonPanelEvent[]>([]);
+  const [timeline, setTimeline] = useState<PersonTimelineResult>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [degradedReason, setDegradedReason] = useState<string | null>(null);
@@ -304,6 +309,8 @@ export function PersonPanelView({
   const [rowRequest, setRowRequest] = useState<RowActionRequest | null>(null);
   /** 搜索关键字（本地过滤 display_name / 备注）。 */
   const [query, setQuery] = useState<string>("");
+  /** 目录页签：联系人（仅直聊）/ 群聊（单列）。 */
+  const [tab, setTab] = useState<"contacts" | "groups">("contacts");
   /** 备注标签的编辑态。 */
   const [tagDraft, setTagDraft] = useState<string>("");
   const [tagBusy, setTagBusy] = useState<boolean>(false);
@@ -331,7 +338,7 @@ export function PersonPanelView({
       setError(null);
       setDegradedReason(null);
       try {
-        const rows = await Promise.resolve(port.listPersons({ limit: LIST_LIMIT }));
+        const rows = await Promise.resolve(port.listPersons({ limit: LIST_LIMIT, direct_only: true }));
         if (!cancelled) setPersons(rows);
       } catch (err) {
         if (!cancelled) {
@@ -438,7 +445,10 @@ export function PersonPanelView({
             person.display_name.toLowerCase().includes(trimmedQuery) ||
             person.remark.toLowerCase().includes(trimmedQuery),
         );
-  const maxMsgs = persons.reduce((max, person) => Math.max(max, person.msg_count), 0);
+  const maxMsgs = persons.reduce(
+    (max, person) => Math.max(max, person.direct_msg_count ?? person.msg_count),
+    0,
+  );
 
   /** 详情栏内容（宽屏内联 / 窄屏覆盖两处复用同一份）。 */
   const renderDetail = (person: PersonPanelRow): ReactElement => {
@@ -473,8 +483,8 @@ export function PersonPanelView({
               padding: SPACE.md,
             }}
           >
-            <b style={{ display: "block", fontSize: 18, ...TABULAR }}>{person.msg_count}</b>
-            <span style={{ fontSize: 11, color: COLORS.subtle }}>消息</span>
+            <b style={{ display: "block", fontSize: 18, ...TABULAR }}>{person.direct_msg_count ?? person.msg_count}</b>
+            <span style={{ fontSize: 11, color: COLORS.subtle }}>直聊消息</span>
           </div>
           <div
             style={{
@@ -483,8 +493,8 @@ export function PersonPanelView({
               padding: SPACE.md,
             }}
           >
-            <b style={{ display: "block", fontSize: 18, ...TABULAR }}>{person.conv_count}</b>
-            <span style={{ fontSize: 11, color: COLORS.subtle }}>会话</span>
+            <b style={{ display: "block", fontSize: 18, ...TABULAR }}>{person.direct_conv_count ?? person.conv_count}</b>
+            <span style={{ fontSize: 11, color: COLORS.subtle }}>直聊会话</span>
           </div>
         </div>
 
@@ -567,7 +577,7 @@ export function PersonPanelView({
 
         <h3 style={{ ...TYPE.section, margin: `0 0 ${SPACE.sm}px` }}>最近互动</h3>
         {timeline.length === 0 ? (
-          <EmptyState icon="🗓" text="暂无事件。" testId="person-timeline-empty" />
+          <EmptyState icon="🗓" text="暂无互动记录。" testId="person-timeline-empty" />
         ) : (
           <ol
             style={{
@@ -578,9 +588,11 @@ export function PersonPanelView({
               marginLeft: SPACE.sm,
             }}
           >
-            {timeline.map((event) => (
+            {timeline.map((interaction) => {
+              const isMessage = "message_id" in interaction;
+              return (
               <li
-                key={event.event_id}
+                key={isMessage ? interaction.message_id : interaction.event_id}
                 style={{ position: "relative", padding: `0 0 ${SPACE.lg}px ${SPACE.lg}px` }}
               >
                 <span
@@ -595,13 +607,18 @@ export function PersonPanelView({
                   }}
                 />
                 <div style={{ fontSize: 11, color: COLORS.subtle, ...TABULAR }}>
-                  {event.event_date} · {event.title}
+                  {isMessage
+                    ? `${interaction.msg_date} · 消息互动 · ${interaction.sender_name || interaction.role}`
+                    : `${interaction.event_date} · ${interaction.title}`}
                 </div>
-                {event.summary !== "" && (
-                  <div style={{ fontSize: 12, color: COLORS.muted }}>{event.summary}</div>
+                {(isMessage ? interaction.content : interaction.summary) !== "" && (
+                  <div style={{ fontSize: 12, color: COLORS.muted }}>
+                    {isMessage ? interaction.content : interaction.summary}
+                  </div>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ol>
         )}
 
@@ -628,7 +645,7 @@ export function PersonPanelView({
         height: "100%",
         fontFamily: "system-ui, sans-serif",
         color: COLORS.text,
-        background: COLORS.surface,
+        background: COLORS.surfaceAlt,
       }}
     >
       <style>{ROW_CSS}</style>
@@ -641,33 +658,74 @@ export function PersonPanelView({
           minHeight: 0,
           display: "flex",
           flexDirection: "column",
-          gap: SPACE.md,
-          padding: SPACE.lg,
+          gap: SPACE.lg,
+          padding: SPACE.xl,
         }}
       >
         {/* 顶部：标题 + 搜索 */}
         <header
-          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: SPACE.md, flexShrink: 0 }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: SPACE.lg,
+            flexShrink: 0,
+            padding: `${SPACE.lg}px ${SPACE.xl}px`,
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: RADIUS.card,
+            background: COLORS.surface,
+            boxShadow: "0 4px 18px rgba(23, 32, 51, 0.04)",
+          }}
         >
-          <h2 style={{ ...TYPE.panelTitle, margin: 0 }}>
-            人物档案 <span style={{ ...TYPE.meta, color: COLORS.subtle, fontWeight: 400 }}>{persons.length}</span>
-          </h2>
-          <input
-            data-testid="person-search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索名字 / 备注"
-            style={{
-              width: 190,
-              maxWidth: "45%",
-              fontSize: 13,
-              padding: `${SPACE.xs}px ${SPACE.sm}px`,
-              border: `1px solid ${COLORS.borderStrong}`,
-              borderRadius: RADIUS.control,
-              fontFamily: "inherit",
-              color: COLORS.text,
-            }}
-          />
+          <div style={{ minWidth: 0 }}>
+            <h2 style={{ ...TYPE.panelTitle, margin: 0, fontSize: 22 }}>
+              人物档案 <span style={{ ...TYPE.meta, color: COLORS.accent, fontWeight: 700 }}>{persons.length}</span>
+            </h2>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: SPACE.sm, minWidth: 0 }}>
+            <div role="tablist" aria-label="人物目录切换" style={{ display: "flex", gap: 2, padding: 2, border: `1px solid ${COLORS.border}`, borderRadius: RADIUS.pill, background: COLORS.surfaceAlt }}>
+              {(["contacts", "groups"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === item}
+                  data-testid={`person-tab-${item}`}
+                  onClick={() => setTab(item)}
+                  style={{
+                    cursor: "pointer",
+                    font: "inherit",
+                    fontSize: 12,
+                    padding: `${SPACE.xs}px ${SPACE.md}px`,
+                    border: "none",
+                    borderRadius: RADIUS.pill,
+                    background: tab === item ? COLORS.surface : "transparent",
+                    color: tab === item ? COLORS.text : COLORS.subtle,
+                    fontWeight: tab === item ? 600 : 400,
+                    boxShadow: tab === item ? "0 1px 3px rgba(23,32,51,0.08)" : "none",
+                  }}
+                >
+                  {item === "contacts" ? "联系人" : "群聊"}
+                </button>
+              ))}
+            </div>
+            <input
+              data-testid="person-search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索名字 / 备注"
+              style={{
+                width: 220,
+                maxWidth: "40vw",
+                fontSize: 13,
+                padding: `${SPACE.sm}px ${SPACE.md}px`,
+                border: `1px solid ${COLORS.borderStrong}`,
+                borderRadius: RADIUS.pill,
+                fontFamily: "inherit",
+                color: COLORS.text,
+              }}
+            />
+          </div>
         </header>
 
         {!bridgeReady && (
@@ -729,19 +787,41 @@ export function PersonPanelView({
           </p>
         )}
 
-        {/* 主体：左列表 + 右详情（窄屏单栏，详情改为覆盖） */}
+        {/* 主体：联系人（左列表 + 右详情）/ 群聊（单独目录与消息） */}
+        {tab === "groups" ? (
+          <GroupDirectoryView port={port} />
+        ) : (
         <div
           style={{
             flex: 1,
             minHeight: 0,
             display: "grid",
-            gridTemplateColumns: isNarrow ? "1fr" : "1fr 320px",
-            gap: SPACE.lg,
-            alignItems: "start",
+            gridTemplateColumns: isNarrow ? "1fr" : "minmax(0, 1fr) minmax(300px, 0.56fr)",
+            gap: 0,
+            alignItems: "stretch",
+            overflow: "hidden",
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: RADIUS.card,
+            background: COLORS.surface,
+            boxShadow: "0 8px 28px rgba(23, 32, 51, 0.05)",
           }}
         >
           {/* 左：人物列表 */}
-          <div style={{ minHeight: 0, overflowY: "auto", height: "100%" }}>
+          <div style={{ minHeight: 0, overflowY: "auto", height: "100%", padding: SPACE.md }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                justifyContent: "space-between",
+                gap: SPACE.md,
+                padding: `${SPACE.xs}px ${SPACE.sm}px ${SPACE.md}px`,
+              }}
+            >
+              <div>
+                <div style={{ ...TYPE.section, marginTop: SPACE.xs }}>联系人目录</div>
+              </div>
+              <span style={{ ...TYPE.meta, color: COLORS.subtle }}>{visiblePersons.length} 位联系人</span>
+            </div>
             {loading && <SkeletonList rows={6} testId="person-loading" />}
             {!loading && visiblePersons.length === 0 && (
               <div
@@ -886,8 +966,18 @@ export function PersonPanelView({
           {!isNarrow && (
             <section
               data-testid="person-detail"
-              style={{ minHeight: 0, overflowY: "auto", height: "100%" }}
+              style={{
+                minHeight: 0,
+                overflowY: "auto",
+                height: "100%",
+                padding: SPACE.xl,
+                background: COLORS.surfaceAlt,
+                borderLeft: `1px solid ${COLORS.border}`,
+              }}
             >
+              <div style={{ paddingBottom: SPACE.md, marginBottom: SPACE.lg, borderBottom: `1px solid ${COLORS.border}` }}>
+                <div style={{ ...TYPE.section, marginTop: SPACE.xs }}>关系档案</div>
+              </div>
               {detail === null ? (
                 <EmptyState
                   icon="🗂"
@@ -900,10 +990,11 @@ export function PersonPanelView({
             </section>
           )}
         </div>
+        )}
       </div>
 
       {/* 窄屏：点人后详情覆盖显示（覆盖列表），带返回按钮 */}
-      {isNarrow && detail !== null && (
+      {tab === "contacts" && isNarrow && detail !== null && (
         <div
           data-testid="person-detail"
           style={{

@@ -207,7 +207,7 @@ describe("B. 面板在空数据 / null / 端口异常时不崩溃", () => {
       createElement(PersonPanelView, { port, bridgeReady: true }),
     );
     await waitFor(() => expect(container.textContent).toContain("暂无人物数据"));
-    expect(listPersons).toHaveBeenCalledWith({ limit: 200 });
+    expect(listPersons).toHaveBeenCalledWith({ limit: 200, direct_only: true });
     expect(container.textContent).not.toContain("数据读取失败");
   });
 
@@ -302,32 +302,62 @@ describe("C. 侧栏图标真实渲染与 selectPanel 接线", () => {
         const o = r.options as { name?: string; id?: string };
         return o.name === "sidebar.panellist" && o.id === id;
       });
-    const person = findIcon("knowself-person");
+    const hub = findIcon("knowself-hub");
     const graph = findIcon("knowself-graph");
-    expect(person).toBeDefined();
+    expect(hub).toBeDefined();
     expect(graph).toBeDefined();
 
     type IconComponent = (props: { size: number; active: boolean }) => ReactElement;
-    const PersonIcon = person!.component as IconComponent;
+    const HubIcon = hub!.component as IconComponent;
     const GraphIcon = graph!.component as IconComponent;
 
-    const rp = render(createElement(PersonIcon, { size: 24, active: false }));
-    fireEvent.click(rp.container.querySelector("button")!);
+    const rh = render(createElement(HubIcon, { size: 24, active: false }));
+    fireEvent.click(rh.container.querySelector("button")!);
     const rg = render(createElement(GraphIcon, { size: 32, active: true }));
     fireEvent.click(rg.container.querySelector("button")!);
 
-    expect(selected).toEqual(["knowself-person", "knowself-graph"]);
+    expect(selected).toEqual(["knowself-hub", "knowself-graph"]);
+  });
+
+  it("旧面板 id 的 main 别名落到对应 tab（兼容既有 selectPanel 调用）", async () => {
+    const fetchStub = vi.fn(async (_input: string, _init?: unknown) =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () => [],
+      }) as unknown as Response,
+    );
+    vi.stubGlobal("fetch", fetchStub);
+    try {
+      const { ctx, registered } = makeStubClientContext();
+      apply(ctx);
+
+      const inboxMain = registered.find((r) => {
+        const o = r.options as { name?: string; key?: string };
+        return o.name === "main" && o.key === "knowself-inbox";
+      });
+      expect(inboxMain).toBeDefined();
+
+      const Comp = inboxMain!.component as () => ReactElement;
+      render(createElement(Comp));
+      expect(screen.getByTestId("knowself-hub-tab-inbox").getAttribute("aria-selected")).toBe("true");
+
+      // 等 effect 里的 fetch 落地，避免 cleanup 时的 act 警告。
+      await waitFor(() => expect(fetchStub).toHaveBeenCalled());
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
 // ── D. inject factory disposer 卸载路径 ────────────────────────────────────
 
 describe("D. ctx.slots.inject factory disposer 可被调用回收", () => {
-  it("12 处 inject 的 factory 均返回 disposer，外层卸载器级联回收全部注册", () => {
+  it("9 处 inject 的 factory 均返回 disposer，外层卸载器级联回收全部注册", () => {
     const { ctx, injected, disposed } = makeStubClientContext();
     apply(ctx);
 
-    // M3 波 2：main ×6（人物/图谱/画像/日志/待整理/资料）+ sidebar.panellist ×6。
+    // 2026-11-18：main ×7（KnowSelf + 5 个兼容别名 + 图谱）+ sidebar.panellist ×2。
     expect(injected.map((x) => x.slotName)).toEqual([
       "main",
       "main",
@@ -335,10 +365,7 @@ describe("D. ctx.slots.inject factory disposer 可被调用回收", () => {
       "main",
       "main",
       "main",
-      "sidebar.panellist",
-      "sidebar.panellist",
-      "sidebar.panellist",
-      "sidebar.panellist",
+      "main",
       "sidebar.panellist",
       "sidebar.panellist",
     ]);
@@ -349,7 +376,8 @@ describe("D. ctx.slots.inject factory disposer 可被调用回收", () => {
 
     expect(disposed).toHaveLength(0);
     for (const x of injected) x.outerDisposer();
-    expect(disposed).toHaveLength(12);
+    expect(disposed).toHaveLength(9);
+    expect(disposed).toContain("knowself-hub");
     expect(disposed).toContain("knowself-person");
     expect(disposed).toContain("knowself-graph");
     expect(disposed).toContain("knowself-profile");

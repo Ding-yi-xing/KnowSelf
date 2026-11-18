@@ -32,6 +32,57 @@ function ensureColumns(
   }
 }
 
+function ensureWechatAuditActions(raw: DatabaseInstance): void {
+  const row = raw
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'wechat_assist_audit'")
+    .get() as { sql: string } | undefined;
+  if (row === undefined || row.sql.includes("'reply_context_shared'")) return;
+
+  const countOf = (): number =>
+    (raw.prepare("SELECT COUNT(*) AS n FROM wechat_assist_audit").get() as { n: number }).n;
+  const before = countOf();
+  let inTransaction = false;
+  try {
+    raw.exec("BEGIN");
+    inTransaction = true;
+    raw.exec(`
+      CREATE TABLE wechat_assist_audit_new (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        at            TEXT NOT NULL,
+        action        TEXT NOT NULL CHECK (action IN (
+          'draft_created','draft_discarded','send_rejected',
+          'send_attempted','send_succeeded','send_failed',
+          'reply_task_started','reply_task_stopped','reply_task_paused',
+          'reply_context_shared'
+        )),
+        draft_id      TEXT NOT NULL,
+        contact_id    TEXT NOT NULL,
+        reason        TEXT,
+        external_id   TEXT
+      );
+      INSERT INTO wechat_assist_audit_new
+        (id, at, action, draft_id, contact_id, reason, external_id)
+      SELECT id, at, action, draft_id, contact_id, reason, external_id
+      FROM wechat_assist_audit;
+      DROP TABLE wechat_assist_audit;
+      ALTER TABLE wechat_assist_audit_new RENAME TO wechat_assist_audit;
+      CREATE INDEX idx_wechat_assist_audit_draft
+        ON wechat_assist_audit(draft_id, id);
+      CREATE INDEX idx_wechat_assist_audit_at
+        ON wechat_assist_audit(at DESC);
+    `);
+    const after = countOf();
+    if (after !== before) {
+      throw new DbCorruptError(`wechat_assist_audit 迁移丢行：迁移前 ${before} 行，迁移后 ${after} 行`);
+    }
+    raw.exec("COMMIT");
+    inTransaction = false;
+  } catch (cause) {
+    if (inTransaction) raw.exec("ROLLBACK");
+    throw cause;
+  }
+}
+
 function ensureSourcesStatusConstraint(raw: DatabaseInstance): void {
   const row = raw
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sources'")
@@ -202,6 +253,13 @@ export function openProfileDb(dbPath: string): ProfileDb {
 
   for (const sql of DDL_STATEMENTS) {
     raw.exec(sql);
+  }
+
+  try {
+    ensureWechatAuditActions(raw);
+  } catch (cause) {
+    raw.close();
+    throw cause;
   }
 
   // 轻量迁移：补齐旧库缺少的列 / 放宽 CHECK 枚举（必须在 schema_version 校验之前）

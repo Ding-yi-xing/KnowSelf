@@ -36,6 +36,14 @@ export interface PersonRow {
   last_msg_at: string | null;
   msg_count: number;
   conv_count: number;
+  /**
+   * 仅「我与该联系人的直聊」的统计（群消息不计入）。
+   * `persons.list({ direct_only: true })` 与 `persons.get` 会填充；其它写路径可缺省。
+   */
+  direct_msg_count?: number;
+  direct_conv_count?: number;
+  direct_first_msg_at?: string | null;
+  direct_last_msg_at?: string | null;
   /** JSON TEXT（话题分布 / 活跃时段 / 情感趋势），解析见 `json.ts`。 */
   profile_json: string;
   manual_locked: boolean;
@@ -96,6 +104,8 @@ export interface PersonListQuery {
   subject_kind?: SubjectKind;
   status?: PersonStatus;
   keyword?: string;
+  /** 只看有直聊消息的人（群消息不计入），并按直聊最近时间倒序。 */
+  direct_only?: boolean;
   limit?: number;
   offset?: number;
 }

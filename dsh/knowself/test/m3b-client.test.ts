@@ -186,7 +186,7 @@ describe("M3B 端口：错误语义三分（401 / 503 / 其它）", () => {
 // ── B. 待整理面板三种态（+ 无写按钮 + 固定提示语） ────────────────────────
 
 describe("M3B 待整理面板", () => {
-  it("正常态：渲染类别 / 目标 / 来源 / 摘要 / 时间 + 系统建议 + 采纳/拒绝按钮", async () => {
+  it("正常态：只显示基本信息，点击展开后才显示目标/来源/系统说明", async () => {
     const listProposals = vi.fn(() => Promise.resolve([PROPOSAL]));
     const { container } = render(
       createElement(InboxPanelView, { port: makePort({ listProposals }) }),
@@ -196,15 +196,131 @@ describe("M3B 待整理面板", () => {
     expect(listProposals).toHaveBeenCalledWith("pending");
     expect(container.textContent).toContain("待整理");
     expect(container.textContent).toContain("卡片分节");
-    expect(container.textContent).toContain("画像卡片 skills · 职业");
-    expect(container.textContent).toContain(PROPOSAL.source_id);
-    expect(container.textContent).toContain(PROPOSAL.created_at);
-    expect(container.textContent).toContain("理由");
-    // 本轮 UI 重设计：待整理不再只读，每条都有「采纳 / 拒绝」按钮
+    // 基本信息默认可见；详细字段收起
+    expect(container.textContent).not.toContain("画像卡片 skills · 职业");
+    expect(container.textContent).not.toContain(PROPOSAL.source_id);
+    expect(container.textContent).not.toContain("系统说明");
     expect(screen.getByRole("button", { name: "采纳" })).toBeDefined();
     expect(screen.getByRole("button", { name: "拒绝" })).toBeDefined();
-    // 底部「在对话里让助手处理」提示语随只读形态一并移除
+
+    fireEvent.click(screen.getByTestId(`inbox-expand-${PROPOSAL.id}`));
+    expect(screen.getByTestId(`inbox-details-${PROPOSAL.id}`).textContent).toContain(
+      "画像卡片 skills · 职业",
+    );
+    expect(screen.getByTestId(`inbox-details-${PROPOSAL.id}`).textContent).toContain(PROPOSAL.source_id);
+    expect(screen.getByTestId(`inbox-details-${PROPOSAL.id}`).textContent).toContain("系统说明");
+    expect(screen.getByTestId(`inbox-details-${PROPOSAL.id}`).textContent).toContain(
+      "资料中提到 Go 项目",
+    );
     expect(screen.queryByTestId("inbox-panel-hint")).toBeNull();
+  });
+
+  it("同一份资料的多个字段合并为一张来源卡，可一次采纳全部", async () => {
+    const second: IngestionProposal = {
+      ...PROPOSAL,
+      id: "99999999-9999-4999-8999-999999999999",
+      target: { kind: "card_section", card_key: "skills", section: "专业技能" },
+    };
+    const listProposals = vi
+      .fn()
+      .mockResolvedValueOnce([PROPOSAL, second])
+      .mockResolvedValueOnce([]);
+    const acceptProposal = vi.fn(() => Promise.resolve(PROPOSAL));
+    render(
+      createElement(InboxPanelView, {
+        port: makePort({ listProposals, acceptProposal }),
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByTestId("inbox-source-group")).toBeDefined());
+    expect(screen.queryByTestId(`inbox-select-${PROPOSAL.id}`)).toBeNull();
+    fireEvent.click(screen.getByTestId(`inbox-source-accept-${PROPOSAL.source_id}`));
+    fireEvent.click(screen.getByTestId("inbox-source-confirm"));
+    await waitFor(() => expect(acceptProposal).toHaveBeenCalledTimes(2));
+  });
+
+  it("多选后可批量采纳：逐条调用 acceptProposal，成功后刷新列表", async () => {
+    const second: IngestionProposal = {
+      ...PROPOSAL,
+      id: "33333333-3333-4333-8333-333333333333",
+      source_id: "66666666-6666-4666-8666-666666666666",
+      proposed_body: "第二条建议",
+    };
+    const listProposals = vi
+      .fn()
+      .mockResolvedValueOnce([PROPOSAL, second])
+      .mockResolvedValueOnce([]);
+    const acceptProposal = vi.fn(() => Promise.resolve(PROPOSAL));
+    render(
+      createElement(InboxPanelView, {
+        port: makePort({ listProposals, acceptProposal }),
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByTestId(`inbox-select-${PROPOSAL.id}`)).toBeDefined());
+    fireEvent.click(screen.getByTestId(`inbox-select-${PROPOSAL.id}`));
+    fireEvent.click(screen.getByTestId(`inbox-select-${second.id}`));
+    expect(screen.getByTestId("inbox-batch-accept").textContent).toContain("2");
+    fireEvent.click(screen.getByTestId("inbox-batch-accept"));
+    fireEvent.click(screen.getByTestId("inbox-batch-confirm"));
+
+    await waitFor(() => expect(acceptProposal).toHaveBeenCalledTimes(2));
+    expect(acceptProposal).toHaveBeenNthCalledWith(1, PROPOSAL.id);
+    expect(acceptProposal).toHaveBeenNthCalledWith(2, second.id);
+    await waitFor(() => expect(listProposals).toHaveBeenCalledTimes(2));
+  });
+
+  it("批量采纳部分失败时保留失败条目并显示汇总提示", async () => {
+    const second: IngestionProposal = {
+      ...PROPOSAL,
+      id: "44444444-4444-4444-8444-444444444444",
+      source_id: "77777777-7777-4777-8777-777777777777",
+    };
+    const listProposals = vi.fn(() => Promise.resolve([PROPOSAL, second]));
+    const acceptProposal = vi
+      .fn()
+      .mockResolvedValueOnce(PROPOSAL)
+      .mockRejectedValueOnce(new Error("db busy"));
+    render(
+      createElement(InboxPanelView, {
+        port: makePort({ listProposals, acceptProposal }),
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByTestId(`inbox-select-${PROPOSAL.id}`)).toBeDefined());
+    fireEvent.click(screen.getByTestId("inbox-select-all"));
+    fireEvent.click(screen.getByTestId("inbox-batch-accept"));
+    fireEvent.click(screen.getByTestId("inbox-batch-confirm"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("inbox-batch-error").textContent).toContain("已采纳 1 条，1 条失败"),
+    );
+  });
+
+  it("多选后可批量拒绝：逐条调用 rejectProposal，成功后刷新列表", async () => {
+    const second: IngestionProposal = {
+      ...PROPOSAL,
+      id: "55555555-5555-4555-8555-555555555555",
+      source_id: "88888888-8888-4888-8888-888888888888",
+    };
+    const listProposals = vi
+      .fn()
+      .mockResolvedValueOnce([PROPOSAL, second])
+      .mockResolvedValueOnce([]);
+    const rejectProposal = vi.fn(() => Promise.resolve(PROPOSAL));
+    render(
+      createElement(InboxPanelView, {
+        port: makePort({ listProposals, rejectProposal }),
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByTestId(`inbox-select-${PROPOSAL.id}`)).toBeDefined());
+    fireEvent.click(screen.getByTestId("inbox-select-all"));
+    fireEvent.click(screen.getByTestId("inbox-batch-reject"));
+    fireEvent.click(screen.getByTestId("inbox-batch-reject-confirm"));
+
+    await waitFor(() => expect(rejectProposal).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listProposals).toHaveBeenCalledTimes(2));
   });
 
   it("空态：暂无待整理提案时给出明确空态，不是错误", async () => {

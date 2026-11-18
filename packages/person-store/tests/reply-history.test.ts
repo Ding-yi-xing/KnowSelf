@@ -115,4 +115,22 @@ describe("replyHistory", () => {
     expect(store.replyHistory.listDirectConversations()).toEqual([]);
     expect(store.replyHistory.listMessages({ conversation_id: "wechat:direct-other" }).rows).toEqual([]);
   });
+
+  it("returns the most recent N messages in ascending order", () => {
+    commitConversation({
+      batchId: "recent-batch",
+      conversationId: "wechat:direct-b",
+      kind: "direct",
+      title: "contact-b",
+      rows: [
+        { id: "b1", senderId: "me", senderName: "me", role: "me", tsMs: 1000, content: "one" },
+        { id: "b2", senderId: "wxid-b", senderName: "contact-b", role: "other", tsMs: 2000, content: "two" },
+        { id: "b3", senderId: "me", senderName: "me", role: "me", tsMs: 3000, content: "three" },
+        { id: "b4", senderId: "wxid-b", senderName: "contact-b", role: "other", tsMs: 4000, content: "four" },
+      ],
+    });
+    const recent = store.replyHistory.listRecentMessages({ conversation_id: "wechat:direct-b", limit: 2 });
+    // 必须是「最近两条」且升序，而不是 listMessages 的最早两条。
+    expect(recent.map((row) => row.message_id)).toEqual(["b3", "b4"]);
+  });
 });

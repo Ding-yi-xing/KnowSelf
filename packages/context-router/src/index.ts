@@ -54,6 +54,14 @@ export interface ContextRouter {
   shutdown(): void;
 }
 
+export type {
+  ReplyContextMessage,
+  ReplyConversationSource,
+  ReplyHistorySource,
+  ReplyRetrievalIndex,
+  ReplySourceMessage,
+} from "./reply-retrieval";
+
 /** person-store 的读侧最小结构面（不引入包依赖，DESIGN-10 §7.4 只读约束）。 */
 export interface ChatStoreLike {
   conversations: {

@@ -36,8 +36,10 @@
  * 浏览器 bundle 不引入领域库运行时）。
  */
 import type {
+  CardInput,
   CardSummary,
   CardWithSections,
+  CoreProfileInput,
   CoreProfileStored,
   CreateSourceInput,
   IngestionProposal,
@@ -87,6 +89,14 @@ export interface KnowselfProfilePort {
   listCards(layer?: KnowselfCardLayer): Promise<CardSummary[]>;
   /** 读取单张卡片（含 sections）。 */
   getCard(key: string): Promise<CardWithSections>;
+  /** 保存核心画像（`PATCH /write/profile/core`）。 */
+  saveProfileCore(input: CoreProfileInput): Promise<CoreProfileStored>;
+  /** 创建一张 L2 主题卡片（`POST /write/cards`）。 */
+  createCard(input: CardInput): Promise<CardWithSections>;
+  /** 保存既有主题卡片（`PATCH /write/cards/:key`）。 */
+  saveCard(key: string, input: CardInput): Promise<CardWithSections>;
+  /** 删除既有主题卡片（`DELETE /write/cards/:key`）。 */
+  deleteCard(key: string): Promise<{ key: string; deleted: boolean }>;
   /** 列出有日志的日期（宿主已按日期倒序返回）。 */
   listJournalDates(): Promise<JournalDateSummary[]>;
   /** 读取某一天的日志记录（无数据时 `records: []`，不是错误）。 */
@@ -250,6 +260,14 @@ export function createRestProfilePort(baseUrl = "/knowself-api"): KnowselfProfil
       get<CardSummary[]>(layer === undefined ? "/cards" : `/cards?layer=${layer}`),
     getCard: (key: string): Promise<CardWithSections> =>
       get<CardWithSections>(`/cards/${encodeURIComponent(key)}`),
+    saveProfileCore: (input: CoreProfileInput): Promise<CoreProfileStored> =>
+      request<CoreProfileStored>("PATCH", "/profile/core", input),
+    createCard: (input: CardInput): Promise<CardWithSections> =>
+      post<CardWithSections>("/cards", input),
+    saveCard: (key: string, input: CardInput): Promise<CardWithSections> =>
+      request<CardWithSections>("PATCH", `/cards/${encodeURIComponent(key)}`, input),
+    deleteCard: (key: string): Promise<{ key: string; deleted: boolean }> =>
+      request<{ key: string; deleted: boolean }>("DELETE", `/cards/${encodeURIComponent(key)}`, {}),
     listJournalDates: (): Promise<JournalDateSummary[]> =>
       get<JournalDateSummary[]>("/journal"),
     getJournal: (date: string): Promise<JournalEntryStored> =>

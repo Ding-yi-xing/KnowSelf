@@ -13,6 +13,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { Context } from "@deepseek-ai/cordis";
+import { ProfileNotFoundError } from "@knowself/profile-store";
 import type { KnowselfServices } from "../src/services.js";
 import { registerKnowselfWebBridge } from "../src/web-bridge.js";
 
@@ -108,6 +109,7 @@ function makeServices(withPersonStore = true): KnowselfServices {
     listPersons: vi.fn(() => [{ person_id: "p1", display_name: "张三" }]),
     getPerson: vi.fn((id: string) => (id === "p1" ? { person_id: "p1" } : null)),
     events: { timeline: vi.fn(() => []) },
+    messages: { count: vi.fn(() => 0), list: vi.fn(() => []) },
   };
   return {
     ...(withPersonStore
@@ -235,6 +237,24 @@ describe("T08 B. 新端点 200 形状 + 参数校验", () => {
     const { status, body } = await get(resource, "/knowself-api/profile/core");
     expect(status).toBe(200);
     expect(body).toEqual(CORE);
+  });
+
+  it("GET /profile/core：全新安装 core 未初始化 → 200 空核心（不是 500）", async () => {
+    const services = makeServices();
+    services.profileStore.core.get = vi.fn(() => {
+      throw new ProfileNotFoundError("core_profile 尚未初始化");
+    });
+    const resource = mount(services);
+    const { status, body } = await get(resource, "/knowself-api/profile/core");
+    expect(status).toBe(200);
+    expect(body).toEqual({
+      display_name: "",
+      locale: "zh-CN",
+      section_tags: [],
+      body: "",
+      updated_at: "",
+      schema_version: 1,
+    });
   });
 
   it("GET /cards → 200 + 全部卡片；?layer=L2 等价于省略；?layer=L1 → 400 unsupported_layer", async () => {

@@ -7,6 +7,7 @@ import { createProposalsRepo } from "./repository/proposals";
 import { createLinksRepo } from "./repository/links";
 import { createTemplatesRepo } from "./repository/templates";
 import { createWechatAssistRepo } from "./repository/wechat-assist";
+import { createIdentityStatesRepo } from "./repository/identity-states";
 import { createEventBus } from "./events";
 import { dispatchWrite } from "./write";
 import { exportProfile, exportProfileBuffer } from "./export";
@@ -21,6 +22,8 @@ export interface ProfileStore {
   links: ReturnType<typeof createLinksRepo>;
   templates: ReturnType<typeof createTemplatesRepo>;
   wechatAssist: ReturnType<typeof createWechatAssistRepo>;
+  /** 身份状态时间线（在读/入职/辞职/求职中…），见 repository/identity-states。 */
+  identityStates: ReturnType<typeof createIdentityStatesRepo>;
   events: ReturnType<typeof createEventBus>;
   write(req: WriteRequest, ctx: { callerKind: "ui" | "ingestion" }): void;
   transaction<T>(fn: () => T): T;
@@ -43,6 +46,7 @@ export function createProfileStore(opts: {
   const links = createLinksRepo(db);
   const templates = createTemplatesRepo(db);
   const wechatAssist = createWechatAssistRepo(db);
+  const identityStates = createIdentityStatesRepo(db);
   const events = createEventBus();
 
   return {
@@ -54,6 +58,7 @@ export function createProfileStore(opts: {
     links,
     templates,
     wechatAssist,
+    identityStates,
     events,
     write(req: WriteRequest, ctx: { callerKind: "ui" | "ingestion" }): void {
       dispatchWrite(

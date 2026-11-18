@@ -225,6 +225,20 @@ export const WechatAssistSectionSchema = z.object({
   max_messages_per_hour: z.number().int().min(1).max(60).default(6),
   /** Minimum delay between successful sends. */
   cooldown_ms: z.number().int().min(0).max(86_400_000).default(300_000),
+  /** 无新消息时主动发送的最小间隔；由回复 worker 使用。 */
+  proactive_interval_ms: z.number().int().min(60_000).max(86_400_000).default(900_000),
+  /**
+   * 静默发送（2026-11-17）：用 UIA 直接写输入框 + 后台回车，不抢前台、不动鼠标、
+   * 不覆盖剪贴板；仅在切会话时短暂需要前台，并在操作后还原焦点/光标。
+   */
+  quiet_send: z.boolean().default(true),
+  /**
+   * 静默模式下要求用户空闲多久才动微信（毫秒，0 = 不等）。
+   * 默认 60s：你在打字时不抢窗口，停下来/离开电脑才发。
+   */
+  quiet_min_idle_ms: z.number().int().min(0).max(3_600_000).default(60_000),
+  /** 为等空闲最多拖延多久（毫秒）；等不到也照发，避免回复无限延期。 */
+  quiet_max_wait_ms: z.number().int().min(0).max(3_600_000).default(120_000),
 });
 
 /**

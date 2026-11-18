@@ -39,6 +39,7 @@ import { handleMiningStatusRoute } from "./mining-status.js";
 import { handlePersonClaimRoute } from "./person-claim.js";
 import { handleAbilityGraphRoute } from "./ability-graph.js";
 import { handleWechatAssistRoute } from "./wechat-assist.js";
+import { handleGroupsRoute } from "./groups.js";
 
 /** REST 端点统一前缀（真实 prefix 匹配：`pathname === prefix` 或 `startsWith(prefix+'/')`）。 */
 export const KNOWSELF_API_BASE = "/knowself-api";
@@ -66,6 +67,8 @@ const ROUTE_HANDLERS: readonly RouteHandler[] = [
   // 0.5.0 T04：能力图谱（只读，表尾追加；既有路径匹配顺序零变更）。
   handleAbilityGraphRoute,
   handleWechatAssistRoute,
+  // 2026-11-16：群聊单列（只读，表尾追加）。
+  handleGroupsRoute,
 ];
 
 /**

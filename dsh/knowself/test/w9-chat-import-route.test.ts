@@ -36,6 +36,10 @@ function makeServices(opts: { withPerson?: boolean; withIngestion?: boolean; kno
       countBySenderId: vi.fn(() => 0),
     },
     aliases: { upsertExtractor: vi.fn() },
+    replyHistory: {
+      listDirectConversations: vi.fn(() => []),
+      listMessages: vi.fn(() => ({ rows: [], next_cursor: null })),
+    },
   };
   const services = {
     ...(withPerson ? { personStore } : {}),
@@ -80,6 +84,51 @@ const mineOk = (nodes = 4, edges = 6) =>
   }));
 
 describe("POST /write/chat-import（A1/A2）", () => {
+  it("导入后通过受限直聊分页源增量同步回复索引", async () => {
+    const dir = tempDir();
+    const { services, personStore } = makeServices();
+    const syncConversation = vi.fn(() => 2);
+    const listMessages = vi.fn(() => ({
+      rows: [{
+        message_id: "m-2",
+        conversation_id: "wechat:direct-1",
+        sender_id: "u1",
+        role: "contact",
+        ts_ms: 2000,
+        content: "你好",
+        content_type: "text",
+      }],
+      next_cursor: null,
+    }));
+    personStore.replyHistory.listDirectConversations.mockReturnValue([{
+      conversation_id: "wechat:direct-1",
+      contact_id: "u1",
+      title: "好友",
+    }]);
+    personStore.replyHistory.listMessages.mockImplementation(listMessages);
+    (services as { contextRouter?: unknown }).contextRouter = {
+      replyRetrieval: { syncConversation },
+    };
+
+    const result = await importChat(services, { source_path: dir }, {
+      ingest: ingestOk() as never,
+      mine: mineOk() as never,
+    });
+
+    expect(syncConversation).toHaveBeenCalledWith(
+      { conversation_id: "wechat:direct-1", contact_id: "u1", title: "好友" },
+      expect.objectContaining({ listMessages: expect.any(Function) }),
+      { batchSize: 500 },
+    );
+    const historySource = syncConversation.mock.calls[0]?.[1] as { listMessages: (input: { conversation_id: string; limit: number }) => unknown };
+    historySource.listMessages({ conversation_id: "wechat:direct-1", limit: 500 });
+    expect(listMessages).toHaveBeenCalledWith({ conversation_id: "wechat:direct-1", limit: 500 });
+    expect(result.body).toMatchObject({
+      reply_index_sync: { state: "ready", conversations: 1, indexed_messages: 2 },
+    });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("正常导入 → 建 source、调 ingest、自动挖掘，回包字段齐全", async () => {
     const dir = tempDir();
     const { services, createSource } = makeServices();

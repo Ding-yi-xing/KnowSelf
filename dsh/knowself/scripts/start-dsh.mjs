@@ -58,6 +58,15 @@ const DSH_BIN = join(
   ".bin",
   process.platform === "win32" ? "dsh.CMD" : "dsh",
 );
+// 直接跑 bin.js：.CMD shim 经 shell 转发参数时曾丢失 `--patch`，导致插件不挂载。
+const DSH_BIN_JS = join(
+  PLUGIN_ROOT,
+  "node_modules",
+  "@deepseek-ai",
+  "dsh",
+  "lib",
+  "bin.js",
+);
 const DRY_RUN_FLAGS = new Set(["--dry-run", "--check"]);
 const CHECK_ONLY_FLAG = "--check-only";
 /** F1：首启密钥引导（生成 persons 主密钥文件）。 */
@@ -647,7 +656,7 @@ async function main() {
   // 5) spawn 或 dry-run
   const dshArgs = ["web", "--patch", PATCH_FILE, ...passthrough];
   process.stdout.write(
-    `[start-dsh] 将执行：${DSH_BIN} ${dshArgs.join(" ")}\n` +
+    `[start-dsh] 将执行：${process.execPath} ${DSH_BIN_JS} ${dshArgs.join(" ")}\n` +
       `    cwd = ${PLUGIN_ROOT}\n`,
   );
   if (dryRun) {
@@ -657,16 +666,15 @@ async function main() {
     return;
   }
 
-  if (!existsSync(DSH_BIN)) {
-    process.stderr.write(`[start-dsh] 找不到 dsh CLI：${DSH_BIN}\n`);
+  if (!existsSync(DSH_BIN_JS)) {
+    process.stderr.write(`[start-dsh] 找不到 dsh CLI：${DSH_BIN_JS}\n`);
     process.exitCode = 1;
     return;
   }
-  const child = spawn(DSH_BIN, dshArgs, {
+  const child = spawn(process.execPath, [DSH_BIN_JS, ...dshArgs], {
     cwd: PLUGIN_ROOT,
     env,
     stdio: "inherit",
-    shell: true, // Windows 下 .bin/dsh 是 .CMD，必须经 shell 执行
   });
   child.on("error", (err) => {
     process.stderr.write(

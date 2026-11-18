@@ -16,44 +16,40 @@
  * 运行期零依赖）。**不 import 任何 `@deepseek-ai/dsh-client-ui-*` 包**——它们在本
  * 独立工作区不可解析（虚拟模块 / 未链接），落地 dsh web 打包环境时由宿主提供实例。
  *
+ * ## 统一入口（2026-11-18）
+ * 侧栏不再平铺「人物 / 画像 / 待整理 / 日志 / 资料」五个图标，而是收进一个
+ * **KnowSelf** 入口（`knowself-hub`），内部用顶部 tab 切换（见 `hub-panel.tsx`）。
+ * 图谱保留独立入口（画布型视图，不在这五个里）。
+ *
+ * 兼容：五个旧面板 id 仍注册为 main 别名（各自落到对应 tab），这样
+ * `ctx.layout.selectPanel("knowself-person")` 这类既有调用/历史深链不会因为
+ * “main panel 未注册”而抛错（dsh 的 selectPanel 对未注册 key 会 throw）。
+ *
  * 数据（B2 已接通）：人物面板只依赖 `PersonPanelDataPort`（见 data-port.ts 头注）。端口优先级：
  * ① `ctx.knowself.personPanelDataPort` 显式注入 → ② `setPersonPanelDataPort()` 模块级显式注册
  * → ③ 默认 `createRestDataPort()`（同 origin `/knowself-api` REST 端口，bridgeReady=true）。
- * `UNAVAILABLE_PORT` / `getPersonPanelDataPort()` 的端口级「未配置」语义保持不变（A2 单测仍成立）；
- * 变化只在 `apply` 的真实渲染路径：不再显示「数据桥接待接入」，改由 REST 端口取真实数据，
- * fetch 失败时走 `PersonPanelView` 既有的「数据读取失败」错误态。
- *
- * M3（只读面板阶段）新增四个面板，数据经 `KnowselfProfilePort`（`profile-port.ts`）：
- *   ④ 画像 `knowself-profile`（L1 core + L2 cards）+ 侧栏 order=2
- *   ⑤ 日志 `knowself-journal`（L3 journal）+ 侧栏 order=4
- *   ⑥ 待整理 `knowself-inbox`（pending proposals，无写按钮）+ 侧栏 order=3
- *   ⑦ 资料 `knowself-sources`（sources 列表）+ 侧栏 order=5
- * 侧栏最终 order = 人物 0 / 图谱 1 / 画像 2 / 待整理 3 / 日志 4 / 资料 5，
- * **既有 person=0 / graph=1 / profile=2 / journal=4 全部未改动**（只插入 3 与 5）。
- *
- * M3 波 3：图谱面板由占位改为真实实现，数据经 `KnowselfGraphPort`（`graph-port.ts`，
- * 默认 `GET /knowself-api/graph`）；**注册位置与 order=1 保持不变**，只替换组件实现。
+ * 画像 / 待整理 / 日志 / 资料共用 `KnowselfProfilePort`（`profile-port.ts`），图谱走
+ * `KnowselfGraphPort`（`graph-port.ts`），都是同 origin REST。
  */
 import type {
   ClientContext,
   ClientServiceKey,
   MainPanelComponent,
+  MainPanelId,
   SidebarPanelIconComponent,
 } from "@knowself/dsh-client-contract";
+import type { ReactElement } from "react";
 import {
   GRAPH_PANEL_ID,
   GRAPH_PANEL_LABEL,
+  HUB_PANEL_ID,
+  HUB_PANEL_LABEL,
   INBOX_PANEL_ID,
-  INBOX_PANEL_LABEL,
   JOURNAL_PANEL_ID,
-  JOURNAL_PANEL_LABEL,
   KNOWSELF_LOCALE_NS,
   PERSON_PANEL_ID,
-  PERSON_PANEL_LABEL,
   PROFILE_PANEL_ID,
-  PROFILE_PANEL_LABEL,
   SOURCES_PANEL_ID,
-  SOURCES_PANEL_LABEL,
 } from "./brand.js";
 import {
   getPersonPanelDataPort,
@@ -71,20 +67,38 @@ import { ProfilePanelView } from "./profile-panel.js";
 import { JournalPanelView } from "./journal-panel.js";
 import { InboxPanelView } from "./inbox-panel.js";
 import { SourcesPanelView } from "./sources-panel.js";
-import {
-  GraphPanelIcon,
-  InboxPanelIcon,
-  JournalPanelIcon,
-  PersonPanelIcon,
-  ProfilePanelIcon,
-  SourcesPanelIcon,
-} from "./icons.js";
+import { KnowselfHubPanel, type HubTabDefinition } from "./hub-panel.js";
+import { openHubTab, type HubTabId } from "./hub-tab.js";
+import { GraphPanelIcon, HubPanelIcon } from "./icons.js";
 
 /**
  * cordis 风格依赖服务 key（与 package.json 中 `dsh.client.inject` 的**服务包名**不同：
  * 这里是 apply 依赖的 ctx 服务键 `slots` / `layout`，见 A2-工单.md 原始蓝图）。
  */
 export const inject: readonly ClientServiceKey[] = ["slots", "layout"];
+
+/** KnowSelf 统一入口内的 tab 顺序（= 侧栏原来的 人物/画像/待整理/日志/资料）。 */
+const HUB_TABS: readonly HubTabDefinition[] = [
+  { id: "person", label: "人物", testId: "knowself-hub-tab-person" },
+  { id: "profile", label: "画像", testId: "knowself-hub-tab-profile" },
+  { id: "inbox", label: "待整理", testId: "knowself-hub-tab-inbox" },
+  { id: "journal", label: "日志", testId: "knowself-hub-tab-journal" },
+  { id: "sources", label: "资料", testId: "knowself-hub-tab-sources" },
+];
+
+/**
+ * 旧面板 id → hub tab 的兼容别名。
+ *
+ * 这些 main key 仍注册（各渲染「停在对应 tab」的 KnowSelf），保证既有
+ * `selectPanel` 调用不会命中 dsh 的未注册检查；侧栏不再展示它们。
+ */
+const HUB_TAB_ALIASES: ReadonlyArray<readonly [HubTabId, MainPanelId]> = [
+  ["person", PERSON_PANEL_ID],
+  ["profile", PROFILE_PANEL_ID],
+  ["inbox", INBOX_PANEL_ID],
+  ["journal", JOURNAL_PANEL_ID],
+  ["sources", SOURCES_PANEL_ID],
+];
 
 /** 宿主可按需在 ctx 上注入的 knowSelf client 服务（duck typing，避免契约耦合）。 */
 interface InjectedKnowselfServices {
@@ -147,8 +161,8 @@ function resolveGraphPort(ctx: ClientContext): KnowselfGraphPort {
 }
 
 /**
- * client 插件 apply：注册人物档案 / 知识图谱 / 画像 / 日志 / 待整理 / 资料六个面板的 main
- * 与侧栏图标，并把图标点击接到 `ctx.layout.selectPanel`。
+ * client 插件 apply：注册 KnowSelf 统一入口（含五个 tab）+ 知识图谱面板，以及
+ * 对应的侧栏图标。
  * @param ctx dsh client Context（含 renderer 提供的 slots 与 layout 提供的 layout）
  */
 export function apply(ctx: ClientContext): void {
@@ -160,18 +174,46 @@ export function apply(ctx: ClientContext): void {
   // W-3：写端口默认走同 origin REST（`/knowself-api/write/*`）。
   // 只在 bridgeReady 时注入：未接桥的环境（浏览器直开）不该出现"点了必然失败"的按钮。
   const personWritePort = bridgeReady ? createRestPersonWritePort() : undefined;
-  const PersonPanel: MainPanelComponent = () => (
-    <PersonPanelView
-      port={port}
-      bridgeReady={bridgeReady}
-      // 空态「导入聊天记录」→ 切到资料面板（导入表单在 `SourcesAddForm` 的「添加资料」里）。
-      // 面板本身不碰导入端点：`ChatImportPort` 那条链路归资料面板，这里只做跳转。
-      onImportChat={() => ctx.layout.selectPanel(SOURCES_PANEL_ID)}
-      {...(personWritePort === undefined ? {} : { writePort: personWritePort })}
+
+  /**
+   * 跳到统一入口的某个 tab（用于其它面板发起的跳转）。
+   * 先更新 tab 状态（已挂载的 hub 会原地响应），再确保主面板是 KnowSelf。
+   */
+  const openHub = (tab: HubTabId): void => {
+    openHubTab(tab);
+    ctx.layout.selectPanel(HUB_PANEL_ID);
+  };
+
+  // 五个 tab 的内容。人物空态的「导入聊天记录」不再切到独立资料面板，
+  // 而是跳到同一个入口内的「资料」tab。
+  const tabViews: Record<HubTabId, ReactElement> = {
+    person: (
+      <PersonPanelView
+        port={port}
+        bridgeReady={bridgeReady}
+        onImportChat={() => openHub("sources")}
+        {...(personWritePort === undefined ? {} : { writePort: personWritePort })}
+      />
+    ),
+    profile: <ProfilePanelView port={profilePort} />,
+    inbox: <InboxPanelView port={profilePort} />,
+    journal: <JournalPanelView port={profilePort} />,
+    sources: <SourcesPanelView port={profilePort} />,
+  };
+
+  /**
+   * 构造 KnowSelf 入口的 main 组件。
+   * @param initialTab 该 main key 落到的 tab（兼容别名用）；缺省沿用模块级当前 tab
+   */
+  const hubPanel = (initialTab?: HubTabId): MainPanelComponent => () => (
+    <KnowselfHubPanel
+      tabs={HUB_TABS}
+      renderTab={(tab) => tabViews[tab]}
+      {...(initialTab === undefined ? {} : { initialTab })}
     />
   );
-  // M3 波 3：图谱从占位视图改为真实实现（canvas 力导向图），数据经 KnowselfGraphPort。
-  // W-2：点击图谱里的人物节点 → 投递 handoff 并切到人物面板（`ctx.layout.selectPanel`）。
+
+  // W-2：点击图谱里的人物节点 → 投递 handoff 并切到入口的「人物」tab。
   //      两个面板可能是**持续挂载**的，所以不能靠 props 直接传 selectedId，
   //      统一走 `panel-jump.ts` 的一次性投递（订阅 + 挂载兜底消费，见该文件头注）。
   const GraphPanel: MainPanelComponent = () => (
@@ -183,86 +225,43 @@ export function apply(ctx: ClientContext): void {
       personPort={port}
       onSelectPerson={(personId) => {
         focusPerson(personId);
-        ctx.layout.selectPanel(PERSON_PANEL_ID);
+        openHub("person");
       }}
     />
   );
-  const ProfilePanel: MainPanelComponent = () => <ProfilePanelView port={profilePort} />;
-  const JournalPanel: MainPanelComponent = () => <JournalPanelView port={profilePort} />;
-  const InboxPanel: MainPanelComponent = () => <InboxPanelView port={profilePort} />;
-  const SourcesPanel: MainPanelComponent = () => <SourcesPanelView port={profilePort} />;
 
   // list 侧栏图标接收 { size, active }；闭包注入 onSelect → ctx.layout.selectPanel。
-  const PersonIcon: SidebarPanelIconComponent = (props) => (
-    <PersonPanelIcon
-      {...props}
-      onSelect={() => ctx.layout.selectPanel(PERSON_PANEL_ID)}
-    />
+  const HubIcon: SidebarPanelIconComponent = (props) => (
+    <HubPanelIcon {...props} onSelect={() => ctx.layout.selectPanel(HUB_PANEL_ID)} />
   );
   const GraphIcon: SidebarPanelIconComponent = (props) => (
-    <GraphPanelIcon
-      {...props}
-      onSelect={() => ctx.layout.selectPanel(GRAPH_PANEL_ID)}
-    />
-  );
-  const ProfileIcon: SidebarPanelIconComponent = (props) => (
-    <ProfilePanelIcon
-      {...props}
-      onSelect={() => ctx.layout.selectPanel(PROFILE_PANEL_ID)}
-    />
-  );
-  const JournalIcon: SidebarPanelIconComponent = (props) => (
-    <JournalPanelIcon
-      {...props}
-      onSelect={() => ctx.layout.selectPanel(JOURNAL_PANEL_ID)}
-    />
-  );
-  const InboxIcon: SidebarPanelIconComponent = (props) => (
-    <InboxPanelIcon
-      {...props}
-      onSelect={() => ctx.layout.selectPanel(INBOX_PANEL_ID)}
-    />
-  );
-  const SourcesIcon: SidebarPanelIconComponent = (props) => (
-    <SourcesPanelIcon
-      {...props}
-      onSelect={() => ctx.layout.selectPanel(SOURCES_PANEL_ID)}
-    />
+    <GraphPanelIcon {...props} onSelect={() => ctx.layout.selectPanel(GRAPH_PANEL_ID)} />
   );
 
-  // ① / ② 中央主区（keyed main）：人物 + 图谱 + 画像 + 日志 + 待整理 + 资料
+  // ① 中央主区（keyed main）：KnowSelf 统一入口 + 五个旧 id 兼容别名 + 知识图谱。
   ctx.slots.inject("main", () =>
-    ctx.slots.register({ name: "main", key: PERSON_PANEL_ID }, PersonPanel),
+    ctx.slots.register({ name: "main", key: HUB_PANEL_ID }, hubPanel()),
   );
+  for (const [tab, panelId] of HUB_TAB_ALIASES) {
+    ctx.slots.inject("main", () =>
+      ctx.slots.register({ name: "main", key: panelId }, hubPanel(tab)),
+    );
+  }
   ctx.slots.inject("main", () =>
     ctx.slots.register({ name: "main", key: GRAPH_PANEL_ID }, GraphPanel),
   );
-  ctx.slots.inject("main", () =>
-    ctx.slots.register({ name: "main", key: PROFILE_PANEL_ID }, ProfilePanel),
-  );
-  ctx.slots.inject("main", () =>
-    ctx.slots.register({ name: "main", key: JOURNAL_PANEL_ID }, JournalPanel),
-  );
-  ctx.slots.inject("main", () =>
-    ctx.slots.register({ name: "main", key: INBOX_PANEL_ID }, InboxPanel),
-  );
-  ctx.slots.inject("main", () =>
-    ctx.slots.register({ name: "main", key: SOURCES_PANEL_ID }, SourcesPanel),
-  );
 
-  // ③ 侧栏图标（list sidebar.panellist）：label 为 locale 感知函数、id 复用面板 id。
-  //    order 依次 0 / 1 / 2 / 3 / 4 / 5——3（待整理 inbox）、5（资料 sources）为 M3 波 2
-  //    新增，既有 person=0 / graph=1 / profile=2 / journal=4 全部未动。
+  // ② 侧栏图标：KnowSelf（order 0）+ 图谱（order 1）。原来五个图标已合并。
   ctx.slots.inject("sidebar.panellist", () =>
     ctx.slots.register(
       {
         name: "sidebar.panellist",
-        id: PERSON_PANEL_ID,
+        id: HUB_PANEL_ID,
         order: 0,
-        label: PERSON_PANEL_LABEL,
+        label: HUB_PANEL_LABEL,
         locale: KNOWSELF_LOCALE_NS,
       },
-      PersonIcon,
+      HubIcon,
     ),
   );
   ctx.slots.inject("sidebar.panellist", () =>
@@ -275,54 +274,6 @@ export function apply(ctx: ClientContext): void {
         locale: KNOWSELF_LOCALE_NS,
       },
       GraphIcon,
-    ),
-  );
-  ctx.slots.inject("sidebar.panellist", () =>
-    ctx.slots.register(
-      {
-        name: "sidebar.panellist",
-        id: PROFILE_PANEL_ID,
-        order: 2,
-        label: PROFILE_PANEL_LABEL,
-        locale: KNOWSELF_LOCALE_NS,
-      },
-      ProfileIcon,
-    ),
-  );
-  ctx.slots.inject("sidebar.panellist", () =>
-    ctx.slots.register(
-      {
-        name: "sidebar.panellist",
-        id: INBOX_PANEL_ID,
-        order: 3,
-        label: INBOX_PANEL_LABEL,
-        locale: KNOWSELF_LOCALE_NS,
-      },
-      InboxIcon,
-    ),
-  );
-  ctx.slots.inject("sidebar.panellist", () =>
-    ctx.slots.register(
-      {
-        name: "sidebar.panellist",
-        id: JOURNAL_PANEL_ID,
-        order: 4,
-        label: JOURNAL_PANEL_LABEL,
-        locale: KNOWSELF_LOCALE_NS,
-      },
-      JournalIcon,
-    ),
-  );
-  ctx.slots.inject("sidebar.panellist", () =>
-    ctx.slots.register(
-      {
-        name: "sidebar.panellist",
-        id: SOURCES_PANEL_ID,
-        order: 5,
-        label: SOURCES_PANEL_LABEL,
-        locale: KNOWSELF_LOCALE_NS,
-      },
-      SourcesIcon,
     ),
   );
 }

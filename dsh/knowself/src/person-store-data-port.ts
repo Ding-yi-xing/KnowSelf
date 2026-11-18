@@ -12,6 +12,9 @@
 import type { PersonListQuery, PersonRow, PersonStore } from "@knowself/person-store";
 import type {
   PersonPanelDataPort,
+  PersonPanelGroup,
+  PersonPanelGroupMessage,
+  PersonPanelMessageInteraction,
   PersonTimelineQuery,
   PersonTimelineResult,
 } from "./client/data-port.js";
@@ -33,7 +36,67 @@ export function createPersonStoreDataPort(store: PersonStore): PersonPanelDataPo
       personId: string,
       q?: PersonTimelineQuery,
     ): PersonTimelineResult {
-      return store.events.timeline(personId, q);
+      const events = store.events.timeline(personId, q);
+      if (events.length > 0) return events;
+
+      const limit = q?.limit ?? 20;
+      const fromMs = q?.from_date === undefined ? undefined : Date.parse(`${q.from_date}T00:00:00.000Z`);
+      const toMs = q?.to_date === undefined ? undefined : Date.parse(`${q.to_date}T23:59:59.999Z`);
+      const total = store.messages.count({
+        person_id: personId,
+        conversation_kind: "direct",
+        ...(Number.isNaN(fromMs) || fromMs === undefined ? {} : { from_ms: fromMs }),
+        ...(Number.isNaN(toMs) || toMs === undefined ? {} : { to_ms: toMs }),
+      });
+      if (total === 0) return [];
+
+      // messages.list 是时间正序；为面板提供最新优先的窗口后再反转。
+      const offset = Math.max(0, total - limit);
+      return store.messages.list({
+        person_id: personId,
+        conversation_kind: "direct",
+        ...(Number.isNaN(fromMs) || fromMs === undefined ? {} : { from_ms: fromMs }),
+        ...(Number.isNaN(toMs) || toMs === undefined ? {} : { to_ms: toMs }),
+        limit,
+        offset,
+      }).reverse().map((message): PersonPanelMessageInteraction => ({
+        kind: "message",
+        message_id: message.message_id,
+        conversation_id: message.conversation_id,
+        sender_name: message.sender_name,
+        role: message.role,
+        ts_ms: message.ts_ms,
+        msg_date: message.msg_date,
+        content: message.content,
+        content_type: message.content_type,
+      }));
+    },
+    listGroups(q?: { limit?: number }): PersonPanelGroup[] {
+      return store.conversations.list({ kind: "group", limit: q?.limit ?? 100 }).map((group) => ({
+        conversation_id: group.conversation_id,
+        title: group.title,
+        member_count: group.member_count,
+        msg_count: group.msg_count,
+        first_msg_at: group.first_msg_at,
+        last_msg_at: group.last_msg_at,
+      }));
+    },
+    groupTimeline(groupId: string, q?: { limit?: number }): PersonPanelGroupMessage[] {
+      const limit = q?.limit ?? 50;
+      const total = store.messages.count({ conversation_id: groupId });
+      if (total === 0) return [];
+      const offset = Math.max(0, total - limit);
+      return store.messages.list({ conversation_id: groupId, limit, offset }).reverse().map((message) => ({
+        kind: "message",
+        message_id: message.message_id,
+        conversation_id: message.conversation_id,
+        sender_name: message.sender_name,
+        role: message.role,
+        ts_ms: message.ts_ms,
+        msg_date: message.msg_date,
+        content: message.content,
+        content_type: message.content_type,
+      }));
     },
   };
 }

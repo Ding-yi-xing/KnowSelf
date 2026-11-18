@@ -31,3 +31,11 @@ playwright-report/
 test-results/
 # 浏览器自动化会话快照（page-*.yml，工具生成，非源码）
 .playwright-mcp/
+
+# 个人运行/验收产物：含真实联系人、聊天画面或本机笔记，不进公开仓库
+.workbuddy/
+knowself-person-redesign.png
+ui-sources-redesign.png
+docs/dsh-integration/evidence/2026-11-16-correctives/
+docs/dsh-integration/evidence/2026-11-16-correctives-round2/
+docs/dsh-integration/evidence/2026-11-16-wechat-assist-e2e.md

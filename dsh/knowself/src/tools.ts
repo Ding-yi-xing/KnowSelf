@@ -1,5 +1,5 @@
 /**
- * tools —— 15 个 knowSelf 领域工具（dsh ToolDefinition 形态）。
+ * tools —— 17 个 knowSelf 领域工具（dsh ToolDefinition 形态）。
  *
  * 每个工具 = dsh `ToolDefinition`：入参 `parameters` 由领域库 Zod schema 经
  * schema-bridge 生成（单一真相源）；`execute` 只做「Zod.parse → 调领域函数 →
@@ -13,7 +13,7 @@
  *
  * 真实依赖标签（逐行核对，不照 05 表格字面）：
  *   仅 profileStore（核心，必成功）：get_profile / get_card / get_journal / append_journal
- *   personStore（人物层）          ：list_persons / get_person / person_events / metrics / network
+ *   personStore（人物层）          ：list_persons / get_person / person_events / metrics / network / chat_messages
  *   不依赖任何服务实体（纯函数）    ：intent（classifyMessages）
  *   contextRouter（检索层）        ：search（另用核心层 settings 推导 provider_id）
  *   ingestion（摄入层）            ：ingest / list_proposals / decide_proposal
@@ -444,7 +444,86 @@ export function makeTools(services: KnowselfServices): ToolDefinition[] {
       },
     },
 
-    // 15. 聊天记录摄入（人物层 + 摄入层；source_id 路径用 chatIngest + ingestion）
+    // 16. 读取已导入的聊天消息（直聊 / 群聊，供模型检索聊天原文）
+    {
+      name: "knowself_chat_messages",
+      description:
+        "读取已导入的聊天消息：query 做关键词检索；conversation_id 读指定会话；person_id 读与某人的直聊；" +
+        "group_only=true 且无其它过滤时列出群聊目录。",
+      requires: ["person"],
+      input: z.object({
+        query: z.string().optional(),
+        conversation_id: z.string().optional(),
+        person_id: z.string().optional(),
+        group_only: z.boolean().optional(),
+        limit: z.number().int().optional(),
+      }),
+      run: (a) => {
+        const store = requireService(personStore, "人物层");
+        const limit = Math.min(Math.max(a.limit ?? 30, 1), 100);
+        const project = (row: {
+          message_id: string;
+          conversation_id: string;
+          sender_name: string;
+          role: string;
+          msg_date: string;
+          content: string;
+          content_type: string;
+        }) => ({
+          message_id: row.message_id,
+          conversation_id: row.conversation_id,
+          sender_name: row.sender_name,
+          role: row.role,
+          msg_date: row.msg_date,
+          content_type: row.content_type,
+          content: row.content.slice(0, 500),
+        });
+        const query = a.query?.trim() ?? "";
+        if (query !== "") {
+          const rows = store.messages.searchContent({
+            keyword: query,
+            ...(a.conversation_id === undefined ? {} : { conversation_id: a.conversation_id }),
+            ...(a.person_id === undefined ? {} : { person_id: a.person_id }),
+            ...(a.group_only === true ? { conversation_kind: "group" } : {}),
+          });
+          return rows.slice(-limit).reverse().map(project);
+        }
+        if (a.conversation_id !== undefined) {
+          const total = store.messages.count({ conversation_id: a.conversation_id });
+          if (total === 0) return [];
+          return store.messages
+            .list({ conversation_id: a.conversation_id, limit, offset: Math.max(0, total - limit) })
+            .reverse()
+            .map(project);
+        }
+        if (a.person_id !== undefined) {
+          const conversationKind = a.group_only === true ? "group" : "direct";
+          const total = store.messages.count({ person_id: a.person_id, conversation_kind: conversationKind });
+          if (total === 0) return [];
+          return store.messages
+            .list({
+              person_id: a.person_id,
+              conversation_kind: conversationKind,
+              limit,
+              offset: Math.max(0, total - limit),
+            })
+            .reverse()
+            .map(project);
+        }
+        if (a.group_only === true) {
+          return store.conversations.list({ kind: "group", limit }).map((group) => ({
+            conversation_id: group.conversation_id,
+            title: group.title,
+            member_count: group.member_count,
+            msg_count: group.msg_count,
+            last_msg_at: group.last_msg_at,
+          }));
+        }
+        throw new Error("需要 query / conversation_id / person_id，或 group_only=true 列出群聊");
+      },
+    },
+
+    // 17. 聊天记录摄入（人物层 + 摄入层；source_id 路径用 chatIngest + ingestion）
     {
       name: "knowself_import_chat",
       description:

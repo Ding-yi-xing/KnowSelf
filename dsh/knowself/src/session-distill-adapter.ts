@@ -1,7 +1,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { ContentBlock, UserMessage } from "@deepseek-ai/dsh-llm";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
-import type { CreateSourceRequest, IngestionProposal } from "@knowself/contracts";
+import type { CreateSourceRequest } from "@knowself/contracts";
 import type { KnowselfServices } from "./services.js";
 
 const DEFAULT_MAX_MESSAGES = 32;
@@ -72,19 +72,6 @@ function normalize(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(/[ \t]+/g, " ").trim();
 }
 
-function looksLikeHighConfidenceIntent(text: string): { confidence: number; reason: string } | null {
-  const normalized = text.replace(/\s+/g, "").toLowerCase();
-  if (!normalized) return null;
-
-  const rules: Array<{ pattern: RegExp; confidence: number; reason: string }> = [
-    { pattern: /记住|记下来|记着|帮我保存|请保存|记录一下/, confidence: 0.98, reason: "用户明确要求记忆或保存" },
-    { pattern: /我的资料|我的信息|个人资料|关于我的信息/, confidence: 0.95, reason: "用户明确提供个人资料" },
-    { pattern: /我决定|决定了|以后按|今后按|请把.*作为默认|我的偏好是/, confidence: 0.94, reason: "用户明确表达决定或长期偏好" },
-  ];
-  const hit = rules.find((rule) => rule.pattern.test(normalized));
-  return hit ? { confidence: hit.confidence, reason: hit.reason } : null;
-}
-
 function isLowValue(text: string): boolean {
   const normalized = text.replace(/[\s，。！？,.!?]/g, "").toLowerCase();
   if (normalized.length < 4) return true;
@@ -109,33 +96,6 @@ function sourceRequest(
     original_name: `dsh 对话 ${sessionId.slice(0, 12)}-${turn}`,
     user_note: "由 dsh 会话适配器捕获；仅在完成回合的 flush 检查点写入。",
     user_tags: ["dsh-session"],
-  };
-}
-
-function makeReviewProposal(
-  sourceId: string,
-  text: string,
-  classification: { confidence: number; reason: string },
-  now: number,
-): IngestionProposal {
-  const body = text.slice(0, 8_000);
-  return {
-    id: crypto.randomUUID(),
-    source_id: sourceId,
-    target: {
-      kind: "source_distill",
-      confidence: classification.confidence,
-      classifier: PROVIDER_ID,
-      reason: classification.reason,
-    },
-    proposed_body: body,
-    reasoning: `dsh 会话价值判定：${classification.reason}；未达到自动蒸馏阈值，等待用户审核。`,
-    source_excerpts: [{ start: 0, end: Math.min(text.length, 2_000_000) }],
-    produced_by_provider: PROVIDER_ID,
-    status: "pending",
-    user_edited_body: null,
-    created_at: new Date(now).toISOString(),
-    decided_at: null,
   };
 }
 
@@ -235,31 +195,47 @@ export function createSessionDistillAdapter(
       .join("\n");
     if (!userText || isLowValue(userText)) return;
     const conversation = renderConversation(capture.messages);
-    const classification = looksLikeHighConfidenceIntent(userText);
     const source = await services.sourceIntake.createPasteSource(
       sourceRequest(capture.sessionId, capture.turn, conversation),
     );
 
-    if (classification && services.ingestion) {
-      await services.ingestion.runDistill(source, {
-        provider_id: "",
-        focus_hints: ["提取用户明确表达的记忆、资料、决定和长期偏好"],
-        max_proposals: 4,
-        force: false,
-      });
-    } else if (classification) {
-      logger?.warn?.("dsh 会话高置信蒸馏降级：摄入服务不可用，已保留 Source", {
+    if (!services.ingestion) {
+      logger?.warn?.("dsh 会话价值判断降级：摄入服务不可用，已保留 Source 但不生成待整理", {
         sourceId: source.id,
         sessionId: capture.sessionId,
         turn: capture.turn,
       });
-    } else {
-      services.profileStore.proposals.insertMany([
-        makeReviewProposal(source.id, conversation, {
-          confidence: 0.45,
-          reason: "对话包含可供资料蒸馏的内容，但没有明确授权自动写入档案",
-        }, now()),
-      ]);
+      capture.persisted = true;
+      return;
+    }
+
+    try {
+      // 由蒸馏模型判断这段对话是否有写入画像的价值：
+      // 返回 0 条 write = 无价值，不产生待整理；返回 write = 有价值，直接采纳。
+      const result = await services.ingestion.runDistill(source, {
+        provider_id: "",
+        focus_hints: [
+          "只提取用户明确表达且未来仍适用的个人信息、偏好、决定、长期目标或重要关系",
+          "忽略一次性的操作指令、代码调试过程、界面修改过程和寒暄",
+        ],
+        max_proposals: 4,
+        force: false,
+      });
+      for (const proposalId of result.produced_proposal_ids) {
+        try {
+          services.ingestion.acceptProposal(proposalId);
+        } catch (error) {
+          logger?.warn?.("dsh 会话有价值提案自动采纳失败，保留为待整理", {
+            proposalId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } catch (error) {
+      logger?.warn?.("dsh 会话价值判断/蒸馏失败，Source 保留但不进待整理", {
+        sourceId: source.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     capture.persisted = true;
   }

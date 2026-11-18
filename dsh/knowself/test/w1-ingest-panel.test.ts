@@ -94,11 +94,12 @@ afterEach(() => {
 });
 
 describe("W-1 资料摄入入口（SourcesPanelView）", () => {
-  it("a) 渲染资料面板 → 出现 data-testid=sources-add-button 且文案含「添加资料」", async () => {
+  it("a) 渲染资料面板 → 显示资料说明和 data-testid=sources-add-button", async () => {
     const { port } = makePort();
     render(createElement(SourcesPanelView, { port }));
     const button = await waitFor(() => screen.getByTestId("sources-add-button"));
     expect(button.textContent).toContain("添加资料");
+    expect(screen.getByText("资料库")).toBeDefined();
   });
 
   it("b) 点击按钮 → 出现 sources-add-form 与三个 tab", () => {

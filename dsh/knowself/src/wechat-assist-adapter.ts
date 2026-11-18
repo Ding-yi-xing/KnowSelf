@@ -45,7 +45,8 @@ export type WechatAssistAuditAction =
   | "send_failed"
   | "reply_task_started"
   | "reply_task_stopped"
-  | "reply_task_paused";
+  | "reply_task_paused"
+  | "reply_context_shared";
 
 export interface WechatAssistAuditEntry {
   at: string;
@@ -69,6 +70,24 @@ export interface WechatUnreadMessage {
   sender_id: string;
   body: string;
   received_at: string;
+}
+
+/**
+ * 会话里最近的一条消息（**双方**都算）。
+ *
+ * 为什么需要：persisted 的导入历史永远落后几分钟，而回复模型必须看到"我刚说了什么、
+ * 对方上一句答了什么"，否则会重复问、接不上话。这类消息直接从微信本地库读。
+ */
+export interface WechatRecentMessage {
+  message_id: string;
+  conversation_id: string;
+  sender_id: string;
+  /** `me` = 本人发的，`them` = 对方发的。 */
+  role: "me" | "them";
+  body: string;
+  received_at: string;
+  /** 毫秒时间戳（用于排序与时间对齐）。 */
+  ts_ms?: number;
 }
 
 export interface WechatDesktopCapabilities {
@@ -114,7 +133,11 @@ export class WechatTransportError extends Error {
 export interface WechatDesktopTransport {
   probeCapabilities(): Promise<WechatDesktopCapabilities>;
   inspectCurrentConversation(): Promise<WechatConversationIdentity | null>;
-  listUnreadMessages(): Promise<WechatUnreadMessage[]>;
+  /** 打开并校验目标会话。实现方必须在返回前确认可见会话等于 contactId。 */
+  prepareTarget?(contactId: string): Promise<WechatConversationIdentity | null>;
+  listUnreadMessages(contactId: string, sinceTsMs?: number): Promise<WechatUnreadMessage[]>;
+  /** 最近 N 条双方消息，用于给回复模型对齐最新上下文（可选：老 bridge 没有这个方法）。 */
+  listRecentMessages?(contactId: string, limit?: number): Promise<WechatRecentMessage[]>;
   sendMessage(input: {
     contact_id: string;
     body: string;
@@ -188,7 +211,24 @@ export interface WechatAssistPersistence {
   getActiveReplyTask?(accountScope: string): WechatReplyTask | undefined;
   listReplyTasks?(): WechatReplyTask[];
   updateReplyTask?(record: WechatReplyTask): void;
+  canContinueReplyTask?(input: { id: string; owner: string; authorization_version: number }): boolean;
+  revokeReplyTaskHistory?(input: { id: string; at: string }): WechatReplyTask | undefined;
+  pauseStartingReplyTask?(input: { id: string; at: string; reason: string }): boolean;
   stopReplyTask?(id: string, at: string, reason?: string): WechatReplyTask | undefined;
+  claimReplyTaskLease?(input: { id: string; owner: string; now: string; lease_until: string }): boolean;
+  progressReplyTask?(input: {
+    id: string; owner: string; now: string; lease_until: string; turn_count: number;
+    send_count: number; status: "running" | "paused"; reason: string | null;
+  }): boolean;
+  createOwnedReplyTurn?(owner: string, record: {
+    task_id: string; inbound_message_id: string | null; generated_body: string | null;
+    status: "started" | "generated" | "sent" | "skipped" | "failed" | "uncertain";
+    reason: string | null; created_at: string; finished_at: string | null;
+  }): number;
+  finishOwnedReplyTurn?(owner: string, id: number, input: {
+    status: "started" | "generated" | "sent" | "skipped" | "failed" | "uncertain";
+    generated_body?: string | null; reason?: string | null; finished_at?: string | null;
+  }): boolean;
 }
 
 export interface WechatAssistAdapterDeps {
@@ -197,13 +237,23 @@ export interface WechatAssistAdapterDeps {
   persistence?: WechatAssistPersistence;
   now?: () => Date;
   createId?: () => string;
+  replyWorker?: (task: WechatReplyTask, owner: string, signal: AbortSignal) => Promise<void>;
 }
 
 export interface WechatAssistAdapter {
+  configureReplyWorker(
+    worker: ((task: WechatReplyTask, owner: string, signal: AbortSignal) => Promise<void>) | undefined,
+    preflight?: (task: WechatReplyTask) => string | null,
+  ): void;
   createDraft(input: { contact_id: string; body: string }): Promise<WechatAssistDraft>;
   listDrafts(): WechatAssistDraft[];
   discardDraft(id: string): Promise<WechatAssistDraft>;
-  sendDraft(id: string, authorization: { explicit: true }): Promise<WechatAssistDraft>;
+  /**
+   * 显式发送一张草稿。
+   * @param authorization `explicit` 必须为 true（人工或 worker 的明确授权）；
+   *   `reply: true` 表示这是「回应对方刚发来的消息」，跳过冷却立即发送（防刷屏仍靠每小时上限）。
+   */
+  sendDraft(id: string, authorization: { explicit: true; reply?: boolean }): Promise<WechatAssistDraft>;
   listReplyTasks(): WechatReplyTask[];
   startReplyTask(input: {
     account_scope?: string;
@@ -215,6 +265,7 @@ export interface WechatAssistAdapter {
     history_authorized: boolean;
   }): Promise<WechatReplyTask>;
   stopReplyTask(id: string, reason?: string): Promise<WechatReplyTask>;
+  revokeReplyTaskHistory(id: string): Promise<WechatReplyTask>;
 }
 
 export class WechatAssistError extends Error {
@@ -267,7 +318,9 @@ function conversationMatchesDraft(
   draft: WechatAssistDraft,
 ): identity is WechatConversationIdentity {
   return identity !== null &&
-    (identity.conversation_id === draft.contact_id || identity.visible_name === draft.contact_id);
+    (identity.conversation_id === draft.contact_id ||
+      identity.conversation_id.endsWith(`:${draft.contact_id}`) ||
+      identity.visible_name === draft.contact_id);
 }
 
 /**
@@ -290,9 +343,29 @@ export function createWechatAssistAdapter(
   // the stable draft id protects retries at the transport boundary.
   const inFlight = new Set<string>();
   const replyTasks = new Map<string, WechatReplyTask>();
+  const activeWorkers = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  let replyWorker = deps.replyWorker;
+  let replyTaskPreflight: ((task: WechatReplyTask) => string | null) | undefined;
 
   function desktopTransport(): WechatDesktopTransport | undefined {
     return deps.transport.desktop;
+  }
+
+  function allReplyTasks(): WechatReplyTask[] {
+    return deps.persistence?.listReplyTasks?.() ?? [...replyTasks.values()];
+  }
+
+  /**
+   * 该联系人是否有正在运行的自动回复任务。
+   *
+   * 业务规则：**用户明确选中一个直聊对象并点了「开始自动聊天」，这个动作本身就是对该联系人
+   * 的发送授权**，不应再被全局 allowlist 拦下（allowlist 只用于没有显式授权的临时草稿发送）。
+   * 这里按任务状态推导，不额外存状态：任务 running/starting 期间该联系人放行，
+   * 任务一停就自动回收，不会永久放宽名单。
+   */
+  function hasRunningReplyTask(contactId: string): boolean {
+    return allReplyTasks().some((task) =>
+      task.contact_id === contactId && (task.status === "running" || task.status === "starting"));
   }
 
   function updateDraftAsSent(
@@ -395,6 +468,11 @@ export function createWechatAssistAdapter(
   }
 
   return {
+    configureReplyWorker(worker, preflight) {
+      replyWorker = worker;
+      replyTaskPreflight = preflight;
+    },
+
     async createDraft(input) {
       if (!policy.enabled) throw new WechatAssistError("wechat assist is disabled", "DISABLED");
       const contactId = input.contact_id.trim();
@@ -455,7 +533,9 @@ export function createWechatAssistAdapter(
       if (policy.drafts_only || !policy.send_enabled) {
         return reject(draft, "SEND_NOT_ENABLED", "sending is disabled; draft remains available");
       }
-      if (!policy.allowlist.includes(draft.contact_id)) {
+      // 显式启动的自动回复任务已经对该联系人授权；只有「没人被明确要求回他」的临时草稿
+      // 才继续受全局 allowlist 约束。
+      if (!policy.allowlist.includes(draft.contact_id) && !hasRunningReplyTask(draft.contact_id)) {
         return reject(draft, "NOT_ALLOWLISTED", "contact is not in the WeChat allowlist");
       }
 
@@ -469,10 +549,11 @@ export function createWechatAssistAdapter(
       const at = now().getTime();
       const sentTimes = recentSuccessfulSends(at);
       const last = sentTimes.at(-1);
-      if (
-        sentTimes.length >= policy.max_messages_per_hour ||
-        (last !== undefined && at - last < policy.cooldown_ms)
-      ) {
+      // 每小时上限对「秒回」也照样生效（防刷屏的最后一道闸）；
+      // 冷却只约束主动发送，回复对方的新消息不排队，否则聊天体感永远是 5 分钟一轮。
+      const hourlyCapped = policy.max_messages_per_hour > 0 && sentTimes.length >= policy.max_messages_per_hour;
+      const cooling = last !== undefined && at - last < policy.cooldown_ms;
+      if (hourlyCapped || (cooling && authorization.reply !== true)) {
         return reject(draft, "RATE_LIMITED", "WeChat send rate limit reached");
       }
 
@@ -496,6 +577,20 @@ export function createWechatAssistAdapter(
             "TRANSPORT_UNAVAILABLE",
             preflightCapabilities.reason ?? "desktop WeChat transport cannot safely send",
           );
+        }
+        if (transport.prepareTarget !== undefined) {
+          try {
+            const prepared = await transport.prepareTarget(draft.contact_id);
+            if (prepared === null) {
+              return reject(draft, "TARGET_MISMATCH", "unable to open the target conversation");
+            }
+          } catch (error) {
+            return reject(
+              draft,
+              "TRANSPORT_UNAVAILABLE",
+              error instanceof Error ? error.message : String(error),
+            );
+          }
         }
         const current = await transport.inspectCurrentConversation();
         if (!conversationMatchesDraft(current, draft)) {
@@ -618,7 +713,7 @@ export function createWechatAssistAdapter(
     },
 
     listReplyTasks() {
-      return (deps.persistence?.listReplyTasks?.() ?? [...replyTasks.values()]).map(copyReplyTask);
+      return allReplyTasks().map(copyReplyTask);
     },
 
     async startReplyTask(input) {
@@ -631,11 +726,27 @@ export function createWechatAssistAdapter(
       if (conversationId === "" || contactId === "" || objective === "" || providerId === "" || modelId === "") {
         throw new WechatAssistError("conversation, contact, objective, provider and model are required", "REPLY_TASK_INVALID");
       }
-      const accountScope = input.account_scope?.trim() || "default";
+      const createdAt = now().toISOString();
+      const transport = desktopTransport();
+      const capabilities = transport === undefined ? undefined : await transport.probeCapabilities();
+      let identity = transport === undefined ? null : await transport.inspectCurrentConversation();
+      if (transport?.prepareTarget !== undefined && capabilities?.can_send === true) {
+        try {
+          identity = await transport.prepareTarget(conversationId);
+        } catch (error) {
+          // 切换失败**不能**把已经拿到的当前会话身份抹成 null：
+          // 真实事故是「所选对象就是当前已打开的会话」，bridge 已确认目标却因反查失败抛错，
+          // 这里清空 identity 后就会被误判成「当前微信账号或联系人与所选目标不匹配」。
+          console.warn("[knowself] prepareTarget 失败，沿用当前会话身份", error instanceof Error ? error.message : String(error));
+        }
+      }
+      // 账号范围以微信实际登录账号为准；旧实现写死 "default" 会让 identity 校验永远不相等。
+      // 为什么 identity 优先：input.account_scope 是 UI 侧传来的旧值（可能是 "default"），
+      // 拿它跟真实 wxid 比会永远不等，于是每次启动都被判「不匹配」。
+      const accountScope = identity?.account_scope?.trim() || input.account_scope?.trim() || "default";
       if (deps.persistence?.getActiveReplyTask?.(accountScope) !== undefined) {
         throw new WechatAssistError("only one active reply task is allowed per WeChat account", "REPLY_TASK_ACTIVE");
       }
-      const createdAt = now().toISOString();
       const task: WechatReplyTask = {
         id: createId(),
         account_scope: accountScope,
@@ -658,19 +769,57 @@ export function createWechatAssistAdapter(
       };
       if (deps.persistence?.createReplyTask !== undefined) deps.persistence.createReplyTask(task);
       else replyTasks.set(task.id, task);
-      // A transport alone is not an auto-reply worker. Until inbound polling,
-      // context assembly, provider generation, and cancellation are composed,
-      // never advertise a task as running or probe/send through the transport.
-      const status: WechatReplyTaskStatus = "paused";
-      const reason = "自动回复 worker 尚未装配（新入站监听与模型回复循环未接入）";
-      task.status = status;
-      task.stop_reason = reason;
+      let reason: string | null = null;
+      if (replyWorker === undefined) reason = "自动回复 worker 尚未装配";
+      // 显式启动任务 = 对该直聊对象的授权，这里不再要求 allowlist；
+      // 只保留全局意图开关（总开关 / 只存草稿），否则「我选了人并点了开始」就白点了。
+      else if (!policy.send_enabled) reason = "全局发送开关未开启";
+      else if (policy.drafts_only) reason = "当前是「只存草稿」策略";
+      else if (capabilities === undefined || !capabilities.available || !capabilities.can_inspect_conversation || !capabilities.can_list_unread || !capabilities.can_send || !capabilities.can_lookup_send_result) reason = capabilities?.reason ?? "微信 transport 能力未通过安全校验";
+      else if (identity === null || identity.kind !== "contact" || identity.account_scope !== accountScope || identity.conversation_id !== conversationId) reason = "当前微信账号或联系人与所选目标不匹配";
+      else if (deps.persistence?.claimReplyTaskLease === undefined || deps.persistence.progressReplyTask === undefined || deps.persistence.createOwnedReplyTurn === undefined || deps.persistence.finishOwnedReplyTurn === undefined || deps.persistence.pauseStartingReplyTask === undefined || deps.persistence.updateReplyTask === undefined || deps.persistence.stopReplyTask === undefined) reason = "自动回复持久化租约能力不完整";
+      else reason = replyTaskPreflight?.(task) ?? null;
+      const owner = createId() + "-worker";
+      const at = now().toISOString();
+      if (reason === null && !deps.persistence!.claimReplyTaskLease!({ id: task.id, owner, now: at, lease_until: new Date(now().getTime() + 30_000).toISOString() })) reason = "无法取得自动回复任务租约";
+      if (reason !== null) {
+        task.status = "paused";
+        task.stop_reason = reason;
+        task.updated_at = at;
+        if (deps.persistence?.pauseStartingReplyTask !== undefined) {
+          const paused = deps.persistence.pauseStartingReplyTask({ id: task.id, at, reason });
+          if (!paused) {
+            const current = deps.persistence.getReplyTask?.(task.id);
+            return current === undefined ? copyReplyTask(task) : copyReplyTask(current);
+          }
+        } else {
+          replyTasks.set(task.id, task);
+        }
+      } else {
+        task.status = "running";
+        task.lease_owner = owner;
+        task.lease_until = new Date(now().getTime() + 30_000).toISOString();
+        task.updated_at = at;
+      }
       task.updated_at = now().toISOString();
-      if (deps.persistence?.updateReplyTask !== undefined) deps.persistence.updateReplyTask(task);
-      else replyTasks.set(task.id, task);
+      if (deps.persistence === undefined) replyTasks.set(task.id, task);
+      if (reason === null && replyWorker !== undefined) {
+        const controller = new AbortController();
+        const done = replyWorker(task, owner, controller.signal).catch(async (error) => {
+          const current = getReplyTask(task.id);
+          if (current.status === "running") {
+            current.status = "paused";
+            current.stop_reason = "自动回复 worker 异常";
+            current.updated_at = now().toISOString();
+            deps.persistence?.updateReplyTask?.(current);
+            await audit({ at: current.updated_at, action: "reply_task_paused", draft_id: current.id, contact_id: current.contact_id, reason: error instanceof Error ? error.message : String(error) });
+          }
+        }).finally(() => activeWorkers.delete(task.id));
+        activeWorkers.set(task.id, { controller, done });
+      }
       await audit({
         at: task.updated_at,
-        action: status === "paused" ? "reply_task_paused" : "reply_task_started",
+        action: reason === null ? "reply_task_started" : "reply_task_paused",
         draft_id: task.id,
         contact_id: task.contact_id,
         ...(reason === null ? {} : { reason }),
@@ -682,27 +831,60 @@ export function createWechatAssistAdapter(
       const existing = getReplyTask(id);
       if (existing.status === "stopped") return existing;
       const at = now().toISOString();
-      const stopped = deps.persistence?.stopReplyTask?.(id, at, reason) ?? (() => {
-        existing.status = "stopped";
+      const active = activeWorkers.get(id);
+      const wasStopping = existing.status === "stopping";
+      if (!wasStopping) {
+        existing.status = "stopping";
         existing.stop_reason = reason;
         existing.lease_owner = null;
         existing.lease_until = null;
         existing.updated_at = at;
-        existing.stopped_at ??= at;
-        replyTasks.set(id, existing);
-        return existing;
-      })();
+        if (deps.persistence?.updateReplyTask !== undefined) deps.persistence.updateReplyTask(existing);
+        else replyTasks.set(id, existing);
+      }
+      if (active !== undefined) {
+        active.controller.abort(reason);
+        await active.done;
+      }
       if (desktopTransport() !== undefined) {
         try { await desktopTransport()!.stop(); } catch { /* stopping is persisted even if UIA cleanup fails */ }
       }
-      await audit({
-        at,
-        action: "reply_task_stopped",
-        draft_id: stopped.id,
-        contact_id: stopped.contact_id,
-        reason,
-      });
+      const stopped = deps.persistence?.stopReplyTask?.(id, now().toISOString(), reason) ?? (() => {
+        existing.status = "stopped";
+        existing.stop_reason = reason;
+        existing.lease_owner = null;
+        existing.lease_until = null;
+        existing.updated_at = now().toISOString();
+        existing.stopped_at ??= existing.updated_at;
+        replyTasks.set(id, existing);
+        return existing;
+      })();
+      if (!wasStopping) await audit({ at, action: "reply_task_stopped", draft_id: stopped.id, contact_id: stopped.contact_id, reason });
       return copyReplyTask(stopped);
+    },
+
+    async revokeReplyTaskHistory(id) {
+      const current = getReplyTask(id);
+      if (!current.history_authorized) return current;
+      const at = now().toISOString();
+      const revoked = deps.persistence?.revokeReplyTaskHistory?.({ id, at });
+      if (revoked === undefined) {
+        current.history_authorized = false;
+        current.authorization_version += 1;
+        current.status = "paused";
+        current.stop_reason = "history_authorization_revoked";
+        current.lease_owner = null;
+        current.lease_until = null;
+        current.updated_at = at;
+        if (deps.persistence !== undefined) deps.persistence.updateReplyTask?.(current);
+        else replyTasks.set(id, current);
+      }
+      const active = activeWorkers.get(id);
+      if (active !== undefined) {
+        active.controller.abort("history_authorization_revoked");
+        await active.done;
+      }
+      return copyReplyTask(revoked ?? current);
     },
   };
 }

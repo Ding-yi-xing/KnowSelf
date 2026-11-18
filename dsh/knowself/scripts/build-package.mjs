@@ -54,7 +54,7 @@ const EXPECTED_MAIN = "dist/bundle/index.js";
  * dist/src/** 是旧 tsc 产物（死代码，且正是「纯 Node ESM 加载无扩展名 import 会失败」的入口），
  * dist/client-bundle/probe*.js 是开发期探针 —— 一并排除，避免消费方误加载。
  */
-const EXPECTED_FILES = ["dist/bundle", "dist/client-bundle/client.js", "cordis.patch.yml"];
+const EXPECTED_FILES = ["dist/bundle", "dist/client-bundle/client.js", "cordis.patch.yml", "scripts/wechat"];
 
 /** 运行时依赖：恰好 4 个，且全部钉死版本（tgz 消费方装的就是这四个）。
  *

@@ -176,7 +176,7 @@ describe("W-3 人物写操作（前端）", () => {
     await waitFor(() => expect(screen.getByTestId("person-merge-candidate-p-b")).toBeDefined());
     fireEvent.click(screen.getByTestId("person-merge-candidate-p-b"));
     // 二次确认必须给出后果文案（消息条数 + 不可撤销）
-    expect(screen.getByTestId("person-merge-consequence").textContent).toContain("3 条消息");
+    expect(screen.getByTestId("person-merge-consequence").textContent).toContain("3 条直聊消息");
 
     fireEvent.click(screen.getByTestId("person-merge-confirm"));
     await waitFor(() => expect(mergePerson).toHaveBeenCalledTimes(1));

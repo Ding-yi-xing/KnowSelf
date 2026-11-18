@@ -83,6 +83,11 @@ function assertBundle(bundled) {
     "isPersonPanelBridgeConfigured()", // 二级：显式注册端口
     "// src/client/rest-data-port.ts",
     "// src/client/index.tsx",
+    // 2026-11-18：统一入口（人物/画像/待整理/日志/资料 → KnowSelf + tab）必须进包，
+    // 否则宿主仍加载五个旧侧栏图标。
+    "// src/client/hub-panel.tsx",
+    "// src/client/hub-tab.ts",
+    "knowself-hub",
   ];
   for (const token of required) {
     if (!bundled.includes(token)) {

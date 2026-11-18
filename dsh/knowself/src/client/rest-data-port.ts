@@ -20,6 +20,8 @@
 import type { PersonListQuery, PersonRow } from "@knowself/person-store";
 import type {
   PersonPanelDataPort,
+  PersonPanelGroup,
+  PersonPanelGroupMessage,
   PersonTimelineQuery,
   PersonTimelineResult,
 } from "./data-port.js";
@@ -107,6 +109,15 @@ export function createRestDataPort(baseUrl = "/knowself-api"): PersonPanelDataPo
     ): Promise<PersonTimelineResult> =>
       get<PersonTimelineResult>(
         `/person/${encodeURIComponent(personId)}/timeline${qs(q)}`,
+      ),
+    listGroups: (q?: { limit?: number }): Promise<PersonPanelGroup[]> =>
+      get<PersonPanelGroup[]>(`/groups${qs(q)}`),
+    groupTimeline: (
+      groupId: string,
+      q?: { limit?: number },
+    ): Promise<PersonPanelGroupMessage[]> =>
+      get<PersonPanelGroupMessage[]>(
+        `/group/${encodeURIComponent(groupId)}/timeline${qs(q)}`,
       ),
   };
 }

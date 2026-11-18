@@ -73,6 +73,26 @@ describe("M3 profile port：URL 拼接与 200 透传", () => {
     await port.listCards();
     expect(fetchStub.mock.calls[0]![0]).toBe("/x-api/cards");
   });
+
+  it("画像 CRUD 一律走写通道，且核心保存不携带浏览器外的写入字段", async () => {
+    const fetchStub = stubFetch({ ok: true });
+    const port = createRestProfilePort();
+
+    await port.saveProfileCore({ body: "手工维护", section_tags: ["偏好"] });
+    await port.createCard({ key: "relationship", title: "关系", summary: "互动偏好", section_tags: [], sections: [{ title: "沟通", body: "及时回应" }] });
+    await port.saveCard("relationship", { key: "ignored-by-server", title: "关系", summary: "已编辑", section_tags: [], sections: [{ title: "沟通", body: "及时回应" }] });
+    await port.deleteCard("relationship");
+
+    expect(fetchStub.mock.calls[0]![0]).toBe("/knowself-api/write/profile/core");
+    expect(fetchStub.mock.calls[0]![1]).toMatchObject({ method: "PATCH", headers: { "x-knowself-write": "1" } });
+    expect(JSON.parse((fetchStub.mock.calls[0]![1] as RequestInit).body as string)).toEqual({ body: "手工维护", section_tags: ["偏好"] });
+    expect(fetchStub.mock.calls[1]![0]).toBe("/knowself-api/write/cards");
+    expect(fetchStub.mock.calls[1]![1]).toMatchObject({ method: "POST", headers: { "x-knowself-idempotency-key": expect.any(String) } });
+    expect(fetchStub.mock.calls[2]![0]).toBe("/knowself-api/write/cards/relationship");
+    expect(fetchStub.mock.calls[2]![1]).toMatchObject({ method: "PATCH" });
+    expect(fetchStub.mock.calls[3]![0]).toBe("/knowself-api/write/cards/relationship");
+    expect(fetchStub.mock.calls[3]![1]).toMatchObject({ method: "DELETE" });
+  });
 });
 
 describe("M3 profile port：错误语义三分", () => {

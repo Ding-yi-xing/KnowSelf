@@ -24,7 +24,7 @@ vi.mock("../src/services.js", async (importOriginal) => {
 });
 
 /**
- * 桩服务：用内存假对象满足 KnowselfServices 接口，覆盖全部 16 个工具，
+ * 桩服务：用内存假对象满足 KnowselfServices 接口，覆盖全部 17 个工具，
  * 不触网、不读写真实 SQLite。
  */
 function makeStubServices(): KnowselfServices {
@@ -62,6 +62,8 @@ function makeStubServices(): KnowselfServices {
     events: { timeline: () => [] },
     // 满足 MiningReadStore：metrics 列表接口（供 getPersonMetrics / getGraphSnapshot 调用）
     metrics: { list: () => [], listGraphSnapshots: () => [] },
+    messages: { searchContent: () => [], count: () => 0, list: () => [] },
+    conversations: { list: () => [] },
   } as unknown as KnowselfServices["personStore"];
 
   const contextRouter = {
@@ -115,19 +117,21 @@ const SAMPLE_ARGS: Record<string, unknown> = {
   knowself_ingest: { kind: "paste", text: "一段资料文本" },
   knowself_list_proposals: { status: "pending" },
   knowself_decide_proposal: { decision: "accept", proposal_id: "pr1" },
+  knowself_chat_messages: { query: "你好" },
   knowself_import_chat: { dir: "/tmp" },
 };
 
 describe("makeTools", () => {
   const services = makeStubServices();
 
-  it("生成恰好 16 个工具且命名正确", () => {
+  it("生成恰好 17 个工具且命名正确", () => {
     const tools = makeTools(services);
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(17);
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
         "knowself_append_journal",
+        "knowself_chat_messages",
         "knowself_decide_proposal",
         "knowself_get_card",
         "knowself_get_journal",
@@ -215,7 +219,7 @@ describe("source_distill 工具决议", () => {
 });
 
 describe("cordis 级挂载验证（HANDOFF 验收口径：ctx.plugin 挂载 + 断言服务调用）", () => {
-  it("ctx.plugin(插件) 挂载后向 ctx.tools 注册 16 个 knowself_* 工具，并调用 systemPrompt.section / settings.configure", async () => {
+  it("ctx.plugin(插件) 挂载后向 ctx.tools 注册 17 个 knowself_* 工具，并调用 systemPrompt.section / settings.configure", async () => {
     // 真实 cordis 根上下文（替代 dsh 宿主在运行时注入的 tools/systemPrompt/settings）
     const root = new Context();
 
@@ -252,7 +256,7 @@ describe("cordis 级挂载验证（HANDOFF 验收口径：ctx.plugin 挂载 + �
       );
     });
 
-    expect(registered).toHaveLength(16);
+    expect(registered).toHaveLength(17);
     expect(
       registered.every(
         (t) =>
@@ -443,14 +447,14 @@ describe("A1-3: apply 装载失败降级", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// W2 / T02：16 个工具 parameters 均非空（D1/P0 回归，旧断言只查 typeof === object）
+// W2 / T02：17 个工具 parameters 均非空（D1/P0 回归，旧断言只查 typeof === object）
 // ─────────────────────────────────────────────────────────────────────────────
-describe("W2/T02：16 个工具 parameters 均非空", () => {
+describe("W2/T02：17 个工具 parameters 均非空", () => {
   const services = makeStubServices();
 
-  it("逐个遍历 16 个工具，Object.keys(parameters).length > 0", () => {
+  it("逐个遍历 17 个工具，Object.keys(parameters).length > 0", () => {
     const tools = makeTools(services);
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(17);
     for (const tool of tools) {
       const keys = Object.keys(tool.parameters as Record<string, unknown>);
       console.log(`[w2-report] ${tool.name} -> ${keys.length}`);

@@ -6,6 +6,8 @@ import { createPersonStore } from "../src/store";
 import { EncryptionKeyInvalidError } from "../src/errors";
 import { deriveReplyRetrievalKey, ensureReplyRetrievalSalt, openDerivedCipherDb } from "../src/crypto/cipher";
 import { makeTempDir, removeTempDir } from "./helpers";
+import { openReplyRetrievalDbFromHandle } from "../../context-router/src/db";
+import { createReplyRetrievalIndex, type ReplyHistorySource, type ReplySourceMessage } from "../../context-router/src/reply-retrieval";
 
 const ROOT_KEY = Buffer.alloc(32, 0x2a);
 const WRONG_KEY = Buffer.alloc(32, 0x7b);
@@ -61,6 +63,79 @@ describe("reply-retrieval cipher boundary", () => {
       value: "SYNTHETIC_REPLY_HISTORY",
     });
     reopened.close();
+    persons.close();
+    removeTempDir(dir);
+  });
+
+  it("indexes 10,050 messages incrementally in the encrypted DB and preserves contact isolation after reopen", () => {
+    const dir = makeTempDir();
+    const personsPath = join(dir, "persons.sqlite");
+    const replyPath = join(dir, "reply-retrieval.sqlite");
+    const saltPath = join(dir, "reply-retrieval.salt");
+    const messages = new Map<string, ReplySourceMessage[]>([
+      ["conv-a", Array.from({ length: 10_050 }, (_, index) => ({
+        message_id: `a${String(index).padStart(5, "0")}`,
+        conversation_id: "conv-a",
+        sender_id: index % 2 === 0 ? "me" : "alice",
+        role: index % 2 === 0 ? "me" : "other",
+        ts_ms: index + 1,
+        content: `synthetic history contactalpha entry${index}`,
+        content_type: "text",
+      }))],
+      ["conv-b", [{
+        message_id: "b00000", conversation_id: "conv-b", sender_id: "bob", role: "other",
+        ts_ms: 1, content: "contactbeta privatephrase", content_type: "text",
+      }]],
+    ]);
+    const source: ReplyHistorySource = {
+      listMessages: ({ conversation_id, after, limit = 500 }) => {
+        const rows = messages.get(conversation_id) ?? [];
+        const start = after === undefined ? 0 : rows.findIndex((row) => row.ts_ms === after.ts_ms && row.message_id === after.message_id) + 1;
+        const page = rows.slice(start, start + limit);
+        const hasMore = start + page.length < rows.length;
+        const last = page[page.length - 1];
+        return {
+          rows: page,
+          next_cursor: hasMore && last ? { ts_ms: last.ts_ms, message_id: last.message_id } : null,
+        };
+      },
+    };
+
+    let persons = createPersonStore({
+      dbPath: personsPath,
+      encryption: { mode: "sqlcipher", env: { KNOWSELF_PERSONS_KEY: ROOT_KEY.toString("base64") } },
+    });
+    let reply = openReplyRetrievalDbFromHandle(persons.openReplyRetrievalDb(replyPath, saltPath));
+    const index = createReplyRetrievalIndex(reply);
+    index.upsertConversation({ conversation_id: "conv-a", contact_id: "alice", title: "Alice" });
+    const started = Date.now();
+    expect(index.syncConversation({ conversation_id: "conv-a", contact_id: "alice", title: "Alice" }, source, { batchSize: 400 })).toBe(10_050);
+    const firstSyncMs = Date.now() - started;
+    expect(firstSyncMs).toBeLessThan(60_000);
+    expect(index.state("conv-a")).toMatchObject({ state: "ready", last_message_id: "a10049" });
+    expect(index.search("conv-a", "contactalpha", 3)).toHaveLength(3);
+
+    messages.get("conv-a")!.push({
+      message_id: "a10050", conversation_id: "conv-a", sender_id: "alice", role: "other",
+      ts_ms: 10_051, content: "synthetic incremental entry", content_type: "text",
+    });
+    expect(index.syncConversation({ conversation_id: "conv-a", contact_id: "alice", title: "Alice" }, source, { batchSize: 400 })).toBe(1);
+    expect(index.syncConversation({ conversation_id: "conv-b", contact_id: "bob", title: "Bob" }, source)).toBe(1);
+    expect(index.search("conv-a", "privatephrase")).toEqual([]);
+    expect(index.search("conv-b", "privatephrase")).toHaveLength(1);
+    reply.close();
+    persons.close();
+
+    expect(readFileSync(replyPath).includes(Buffer.from("synthetic history contactalpha"))).toBe(false);
+    persons = createPersonStore({
+      dbPath: personsPath,
+      encryption: { mode: "sqlcipher", env: { KNOWSELF_PERSONS_KEY: ROOT_KEY.toString("base64") } },
+    });
+    reply = openReplyRetrievalDbFromHandle(persons.openReplyRetrievalDb(replyPath, saltPath));
+    const reopenedIndex = createReplyRetrievalIndex(reply);
+    expect(reopenedIndex.recent("conv-a", 1)[0]).toMatchObject({ message_id: "a10050", content: "synthetic incremental entry" });
+    expect(reopenedIndex.search("conv-a", "privatephrase")).toEqual([]);
+    reply.close();
     persons.close();
     removeTempDir(dir);
   });

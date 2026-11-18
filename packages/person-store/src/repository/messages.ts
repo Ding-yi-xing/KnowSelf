@@ -17,6 +17,7 @@ export interface MessagesRepo extends MentionsRepo, TraceRepo, MessageStreamRepo
   count(q?: {
     conversation_id?: string;
     person_id?: string;
+    conversation_kind?: "direct" | "group";
     from_ms?: number;
     to_ms?: number;
   }): number;
@@ -39,6 +40,7 @@ export interface MessagesRepo extends MentionsRepo, TraceRepo, MessageStreamRepo
   list(q: {
     conversation_id?: string;
     person_id?: string;
+    conversation_kind?: "direct" | "group";
     from_ms?: number;
     to_ms?: number;
     content_types?: readonly ContentType[];
@@ -50,6 +52,7 @@ export interface MessagesRepo extends MentionsRepo, TraceRepo, MessageStreamRepo
     keyword: string;
     conversation_id?: string;
     person_id?: string;
+    conversation_kind?: "direct" | "group";
     from_ms?: number;
     to_ms?: number;
     limit?: number;
@@ -58,6 +61,7 @@ export interface MessagesRepo extends MentionsRepo, TraceRepo, MessageStreamRepo
   histogramByDate(q: {
     conversation_id?: string;
     person_id?: string;
+    conversation_kind?: "direct" | "group";
     from_date?: string;
     to_date?: string;
   }): { msg_date: string; count: number }[];

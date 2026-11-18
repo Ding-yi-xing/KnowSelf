@@ -29,9 +29,9 @@ import type { IngestionProposal, SourceStatus, SourceStored } from "@knowself/co
 import type { KnowselfProfilePort } from "./profile-port.js";
 import { DegradedError, SessionExpiredError } from "./profile-port.js";
 import { SourcesAddForm } from "./sources-add-form.js";
-import { ChatSourceCard } from "./chat-source-card.js";
 import { WechatAssistSection } from "./wechat-assist-section.js";
-import { Avatar, PanelShell, Pill, useContainerWidth } from "./ui-kit.js";
+import { ConfirmDialog, Modal } from "./modal.js";
+import { Avatar, PanelHeading, PanelShell, Pill, useContainerWidth } from "./ui-kit.js";
 import { bumpMiningRefresh } from "./mining-refresh.js";
 import { NARROW_BREAKPOINT, RADIUS, SPACE } from "./ui-tokens.js";
 import {
@@ -246,6 +246,11 @@ export function SourcesPanelView({ port }: SourcesPanelViewProps): ReactElement 
     }
   };
 
+  const deleteTarget =
+    deleteConfirmId === null
+      ? null
+      : sources.find((source) => source.id === deleteConfirmId) ?? null;
+
   return (
     <PanelShell
       testId="sources-panel"
@@ -256,12 +261,12 @@ export function SourcesPanelView({ port }: SourcesPanelViewProps): ReactElement 
         minHeight: 0,
         fontFamily: "system-ui, sans-serif",
         color: PANEL_COLORS.text,
-        background: PANEL_COLORS.surface,
+        background: PANEL_COLORS.subtleBg,
       }}
     >
-      <header style={{ padding: "12px 16px 8px", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.4, margin: 0 }}>资料</h2>
+      <PanelHeading
+        title="资料"
+        action={
           <button
             type="button"
             data-testid="sources-add-button"
@@ -273,30 +278,64 @@ export function SourcesPanelView({ port }: SourcesPanelViewProps): ReactElement 
             style={{
               cursor: "pointer",
               fontSize: 12,
-              padding: "4px 12px",
+              padding: SPACE.sm + "px " + SPACE.md + "px",
               border: `1px solid ${PANEL_COLORS.accent}`,
-              background: PANEL_COLORS.accentBg,
-              color: PANEL_COLORS.accentText,
-              borderRadius: 4,
+              background: PANEL_COLORS.accent,
+              color: "#ffffff",
+              borderRadius: RADIUS.pill,
+              fontWeight: 600,
             }}
           >
             添加资料
           </button>
-        </div>
-        <p style={{ fontSize: 12, color: PANEL_COLORS.muted, margin: "4px 0 0" }}>
-          共 {sources.length} 份资料
-        </p>
-      </header>
+        }
+      />
 
-      <WechatAssistSection />
+      <div
+        ref={rootRef}
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: SPACE.xl + "px" }}
+      >
+        <section
+          aria-label="资料接入工作台"
+          style={{
+            marginBottom: SPACE.xl,
+            padding: SPACE.lg,
+            border: `1px solid ${PANEL_COLORS.border}`,
+            borderRadius: RADIUS.card,
+            background: PANEL_COLORS.surface,
+            boxShadow: "0 8px 24px rgba(23, 32, 51, 0.05)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: SPACE.md,
+              marginBottom: SPACE.lg,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 15, color: PANEL_COLORS.text }}>资料接入工作台</h3>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr",
+              gap: SPACE.lg,
+              alignItems: "start",
+            }}
+          >
+            <WechatAssistSection />
+          </div>
+        </section>
 
-      {/* W-35-B：聊天数据源卡片（常驻，与资料列表并列；不占 tab、不随列表滚动） */}
-      <div style={{ padding: "0 16px 8px", flexShrink: 0 }}>
-        <ChatSourceCard />
-      </div>
-
-      <div ref={rootRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 16px 16px" }}>
-        {showAdd && (
+        <Modal
+          open={showAdd}
+          title="添加资料"
+          onClose={() => setShowAdd(false)}
+          testId="sources-add-modal"
+          width={640}
+        >
           <SourcesAddForm
             port={port}
             onDone={() => {
@@ -308,7 +347,7 @@ export function SourcesPanelView({ port }: SourcesPanelViewProps): ReactElement 
             onMiningRefresh={bumpMiningRefresh}
             onCancel={() => setShowAdd(false)}
           />
-        )}
+        </Modal>
         {redistillError !== null && (
           <p
             role="alert"
@@ -332,6 +371,20 @@ export function SourcesPanelView({ port }: SourcesPanelViewProps): ReactElement 
         {failure !== null && failure.kind === "error" && (
           <ErrorNotice message={failure.message} testId="sources-panel-error" />
         )}
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            gap: SPACE.md,
+            margin: `${SPACE.xl}px 0 ${SPACE.md}px`,
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0, fontSize: 15, color: PANEL_COLORS.text }}>资料库</h3>
+          </div>
+        </div>
 
         {loading && <LoadingNotice />}
         {!loading && failure === null && sources.length === 0 && (
@@ -448,9 +501,11 @@ export function SourcesPanelView({ port }: SourcesPanelViewProps): ReactElement 
               data-testid="sources-panel-item"
               style={{
                 border: `1px solid ${PANEL_COLORS.border}`,
-                borderRadius: 6,
-                padding: 10,
-                marginBottom: 10,
+                borderRadius: RADIUS.card,
+                padding: SPACE.lg,
+                marginBottom: SPACE.md,
+                background: PANEL_COLORS.surface,
+                boxShadow: "0 4px 16px rgba(23, 32, 51, 0.04)",
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
@@ -564,58 +619,6 @@ export function SourcesPanelView({ port }: SourcesPanelViewProps): ReactElement 
                 </div>
               )}
 
-              {deleteConfirmId === source.id && (
-                <div
-                  data-testid="source-delete-dialog"
-                  style={{
-                    marginTop: 8,
-                    border: `1px solid ${PANEL_COLORS.dangerText}`,
-                    borderRadius: 6,
-                    padding: 8,
-                    fontSize: 12,
-                    color: PANEL_COLORS.dangerText,
-                    ...WRAP_TEXT,
-                  }}
-                >
-                  删除「{displayName(source)}」？该资料与其提案将一并移除，
-                  <strong>不可撤销</strong>。
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    <button
-                      type="button"
-                      data-testid="source-delete-confirm"
-                      disabled={rowBusyId !== null}
-                      onClick={() => void onDelete(source.id)}
-                      style={{
-                        cursor: rowBusyId !== null ? "default" : "pointer",
-                        fontSize: 12,
-                        padding: "4px 10px",
-                        border: `1px solid ${PANEL_COLORS.dangerText}`,
-                        background: PANEL_COLORS.surface,
-                        color: PANEL_COLORS.dangerText,
-                        borderRadius: 4,
-                      }}
-                    >
-                      确认删除
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDeleteConfirmId(null)}
-                      style={{
-                        cursor: "pointer",
-                        fontSize: 12,
-                        padding: "4px 10px",
-                        border: `1px solid ${PANEL_COLORS.border}`,
-                        background: PANEL_COLORS.surface,
-                        color: PANEL_COLORS.text,
-                        borderRadius: 4,
-                      }}
-                    >
-                      取消
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {rowError !== null && rowError.id === source.id && (
                 <p
                   role="alert"
@@ -629,6 +632,25 @@ export function SourcesPanelView({ port }: SourcesPanelViewProps): ReactElement 
           );
         })}
       </div>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="删除资料"
+        danger
+        busy={rowBusyId !== null}
+        message={
+          deleteTarget === null
+            ? "删除该资料？"
+            : <>删除「{displayName(deleteTarget)}」？该资料与其提案将一并移除，<strong>不可撤销</strong>。</>
+        }
+        confirmLabel="确认删除"
+        onCancel={() => setDeleteConfirmId(null)}
+        onConfirm={() => {
+          if (deleteTarget !== null) void onDelete(deleteTarget.id);
+        }}
+        testId="source-delete-dialog"
+        confirmTestId="source-delete-confirm"
+      />
     </PanelShell>
   );
 }

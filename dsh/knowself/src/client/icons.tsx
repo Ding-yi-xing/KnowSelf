@@ -55,6 +55,15 @@ export function PanelIcon({
   );
 }
 
+/** 「KnowSelf」统一入口侧栏图标（人物/画像/待整理/日志/资料）。 */
+export interface HubPanelIconProps extends SidebarPanelIconOwnerProps {
+  onSelect: () => void;
+}
+
+export function HubPanelIcon(props: HubPanelIconProps): ReactElement {
+  return <PanelIcon {...props} glyph="K" title="KnowSelf" />;
+}
+
 /** 「人物档案」侧栏图标。 */
 export interface PersonPanelIconProps extends SidebarPanelIconOwnerProps {
   onSelect: () => void;

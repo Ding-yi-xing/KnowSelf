@@ -13,6 +13,7 @@
  * - 写一行结构化审计日志，事后能查到"谁一键采纳了多少条"。
  */
 import type { KnowselfServices } from "../services.js";
+import { scheduleGraphRefresh } from "../graph-refresh.js";
 import { BadRequestError, degradedBody, type DispatchResult } from "./http.js";
 
 /** 请求体：`source_id` 与 `batch_id` 二选一。 */
@@ -95,6 +96,11 @@ export async function acceptProposalsBatch(
     } catch {
       failedIds.push(proposal.id);
     }
+  }
+
+  // 批量采纳聊天消息后必须重算图谱；否则快照仍是导入时“消息尚未提交”的旧图。
+  if (accepted > 0 && services.personStore !== undefined) {
+    scheduleGraphRefresh(services.personStore);
   }
 
   try {

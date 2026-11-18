@@ -31,7 +31,8 @@ import { runMiningPipeline } from "@knowself/mining";
 import type { PersonStore } from "@knowself/person-store";
 import type { KnowselfServices } from "../services.js";
 import { makeIngestionProposalSink } from "../proposal-sink.js";
-import { BadRequestError, degradedBody, type DispatchResult } from "./http.js";
+import { BadRequestError, degradedBody, errorMessage, sanitizeReason, type DispatchResult } from "./http.js";
+import { WechatSourceError, prepareWechatExport } from "../wechat-source.js";
 
 /** 可注入的协作者（测试用；缺省走真实实现）。 */
 export interface ChatImportDeps {
@@ -49,6 +50,13 @@ interface ChatImportBody {
   source_id?: string;
   /** reader：默认 txt（P0 实测产物）。 */
   reader?: "txt" | "json";
+  /** 直接选择微信 `xwechat_files` 目录：由 dsh 内部完成取密钥/解密/导出。 */
+  wechat_root?: string;
+  /**
+   * @deprecated 2026-11-17 起无效：密钥改为从**运行中的微信进程**只读提取，
+   * 不再需要「退出并重启微信抓密钥」。字段保留仅为兼容老客户端（不报 400）。
+   */
+  capture_key?: boolean;
   /** 关键字过滤（会话标题/键）。 */
   only?: string[];
   /**
@@ -93,8 +101,20 @@ function parseBody(raw: unknown): ChatImportBody {
     }
     out.source_id = sourceId.trim();
   }
-  if (out.source_path === undefined && out.source_id === undefined) {
-    throw new BadRequestError("必须提供 source_path 或 source_id 之一");
+  const wechatRoot = body.wechat_root;
+  if (wechatRoot !== undefined) {
+    if (typeof wechatRoot !== "string" || wechatRoot.trim() === "") {
+      throw new BadRequestError("字段 wechat_root 必须是非空字符串");
+    }
+    out.wechat_root = wechatRoot.trim();
+  }
+  const captureKey = body.capture_key;
+  if (captureKey !== undefined) {
+    if (typeof captureKey !== "boolean") throw new BadRequestError("字段 capture_key 必须是布尔");
+    out.capture_key = captureKey;
+  }
+  if (out.source_path === undefined && out.source_id === undefined && out.wechat_root === undefined) {
+    throw new BadRequestError("必须提供 source_path / source_id / wechat_root 之一");
   }
   const reader = body.reader;
   if (reader !== undefined) {
@@ -187,9 +207,36 @@ export async function importChat(
     return degradedBody(`聊天导入需要${layer === "person" ? "人物层" : "摄入层"}，当前未就绪`, layer);
   }
 
-  // source_path 必须是存在的目录
+  // source_path 必须是存在的目录；wechat_root 则先跑内置解密/导出流程得到 txt 目录。
   let dir = body.source_path;
   let sourceId = body.source_id;
+  let wechatInfo: { db_dir: string; key_source: "live" | "reused" | "captured"; summary: unknown } | null = null;
+  if (body.wechat_root !== undefined) {
+    try {
+      const prepared = await prepareWechatExport({
+        root: body.wechat_root,
+        dataDir: services.paths.dataDir,
+      });
+      dir = prepared.txtDir;
+      wechatInfo = {
+        db_dir: prepared.dbDir,
+        key_source: prepared.keySource,
+        summary: prepared.summary,
+      };
+    } catch (error) {
+      if (error instanceof WechatSourceError) {
+        return {
+          status: error.code === "WECHAT_KEY_REQUIRED" ? 409 : error.code === "WECHAT_PATH_INVALID" ? 400 : 502,
+          body: {
+            error: error.message,
+            code: error.code,
+            ...(error.recoverable ? { recoverable: true } : {}),
+          },
+        };
+      }
+      throw error;
+    }
+  }
   if (dir !== undefined) {
     if (!existsSync(dir) || !statSync(dir).isDirectory()) {
       throw new BadRequestError(`source_path 不是可读目录：${dir}`);
@@ -200,7 +247,7 @@ export async function importChat(
   if (sourceId === undefined) {
     const created = await ingestion.createSource({
       kind: "paste",
-      text: `聊天记录导入：${dir ?? "(已有资料)"}`,
+      text: `聊天记录导入：${body.wechat_root ?? dir ?? "(已有资料)"}`,
       original_name: `chat-import-${Date.now()}`,
       user_note: "",
       user_tags: [],
@@ -217,7 +264,7 @@ export async function importChat(
 
   if (dir === undefined) {
     // 只给了 source_id 却没有目录：没有可导入的产物，直接 400（不猜「资料里存放路径」）
-    throw new BadRequestError("仅提供 source_id 时还需提供 source_path（导出产物目录）");
+    throw new BadRequestError("仅提供 source_id 时还需提供 source_path 或 wechat_root");
   }
 
   const ingest = deps.ingest ?? ingestExport;
@@ -238,15 +285,27 @@ export async function importChat(
     },
   };
 
-  const result = await ingest({
-    store: personStore,
-    dir,
-    source_id: sourceId,
-    proposalSink: recordingSink,
-    chatCommitter: createChatMessageCommitter(personStore),
-    ...(body.reader === undefined ? {} : { reader: body.reader }),
-    ...(body.only === undefined || body.only.length === 0 ? {} : { only: body.only }),
-  });
+  let result: Awaited<ReturnType<typeof ingestExport>>;
+  try {
+    result = await ingest({
+      store: personStore,
+      dir,
+      source_id: sourceId,
+      proposalSink: recordingSink,
+      chatCommitter: createChatMessageCommitter(personStore),
+      reader: body.reader ?? "txt",
+      ...(body.only === undefined || body.only.length === 0 ? {} : { only: body.only }),
+    });
+  } catch (error) {
+    return {
+      status: 500,
+      body: {
+        error: sanitizeReason(errorMessage(error), "读取或解析失败"),
+        code: "INGEST_FAILED",
+        phase: "读取、解析与入库",
+      },
+    };
+  }
 
   // 批次 2（B2-3/B2-4）：自动归档判定 + 按策略采纳 + material 自动蒸馏。
   // 判定失败/蒸馏失败都只记 warning，**不阻断导入**（导入成功与否只看上面那段）。
@@ -283,6 +342,52 @@ export async function importChat(
       );
     } catch {
       /* stderr 不可用不影响主流程 */
+    }
+  }
+
+  // Keep reply retrieval separate from mining statistics: the encrypted source
+  // database can contain messages while the model-facing index is still empty.
+  let replyIndexSync: { state: "ready" | "unavailable" | "failed"; conversations: number; indexed_messages: number; warning?: string } | undefined;
+  const replyIndex = services.contextRouter?.replyRetrieval;
+  if (replyIndex === undefined) {
+    replyIndexSync = { state: "unavailable", conversations: 0, indexed_messages: 0 };
+  } else {
+    let conversations = 0;
+    let indexedMessages = 0;
+    try {
+      const history = {
+        listMessages: (input: { conversation_id: string; after?: { ts_ms: number; message_id: string }; limit?: number }) => {
+          const page = personStore.replyHistory.listMessages(input);
+          return {
+            rows: page.rows.map((row) => ({
+              message_id: row.message_id,
+              conversation_id: row.conversation_id,
+              sender_id: row.sender_id,
+              role: row.role,
+              ts_ms: row.ts_ms,
+              content: row.content,
+              content_type: row.content_type,
+            })),
+            next_cursor: page.next_cursor,
+          };
+        },
+      };
+      for (const conversation of personStore.replyHistory.listDirectConversations()) {
+        indexedMessages += replyIndex.syncConversation({
+          conversation_id: conversation.conversation_id,
+          contact_id: conversation.contact_id,
+          title: conversation.title,
+        }, history, { batchSize: 500 });
+        conversations += 1;
+      }
+      replyIndexSync = { state: "ready", conversations, indexed_messages: indexedMessages };
+    } catch {
+      replyIndexSync = {
+        state: "failed",
+        conversations,
+        indexed_messages: indexedMessages,
+        warning: "聊天已导入，但回复索引同步失败；请重试更新后再启动回复助手",
+      };
     }
   }
 
@@ -343,6 +448,8 @@ export async function importChat(
       // 默认 0（auto_commit=false）。UI 据此区分「等待确认」与「已自动采纳」
       // auto_committed = 采纳的 **proposal** 数（chat-ingest 按会话产 proposal，1 会话 = 1 条）
       auto_committed: autoCommitted,
+      proposals_created: createdProposalIds.length,
+      reply_index_sync: replyIndexSync,
       // messages_committed = 实际落库的**消息**数（采纳 1 条 proposal 可能带入 80 条消息）
       messages_committed: Math.max(0, personStore.messages.count() - messagesBefore),
       // 批次 2：自动归档判定与采纳情况（判定一定记录，采纳看开关）
@@ -352,6 +459,7 @@ export async function importChat(
       snapshot_id: snapshotId,
       nodes,
       edges,
+      ...(wechatInfo === null ? {} : { wechat: wechatInfo }),
       ...(miningWarning === null ? {} : { mining_warning: miningWarning }),
     },
   };

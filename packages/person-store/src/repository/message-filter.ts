@@ -13,6 +13,8 @@ export interface MessageFilter {
 export interface MessageFilterQuery {
   conversation_id?: string;
   person_id?: string;
+  /** 只查直聊（direct）或群聊（group）的消息。 */
+  conversation_kind?: "direct" | "group";
   from_ms?: number;
   to_ms?: number;
   content_types?: readonly ContentType[];
@@ -52,10 +54,16 @@ export const REVERTED_BATCH_GUARD =
 export function buildFilter(q: MessageFilterQuery): MessageFilter {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
-  const join = q.person_id === undefined ? "" : "JOIN v_chat_messages v ON v.message_id = m.message_id";
+  const joins: string[] = [];
   if (q.person_id !== undefined) {
+    joins.push("JOIN v_chat_messages v ON v.message_id = m.message_id");
     conditions.push("v.sender_person_id = ?");
     params.push(q.person_id);
+  }
+  if (q.conversation_kind !== undefined) {
+    joins.push("JOIN chat_conversations ck ON ck.conversation_id = m.conversation_id");
+    conditions.push("ck.kind = ?");
+    params.push(q.conversation_kind);
   }
   if (q.conversation_id !== undefined) {
     conditions.push("m.conversation_id = ?");
@@ -77,5 +85,5 @@ export function buildFilter(q: MessageFilterQuery): MessageFilter {
   // histogramByDate 与 context-router 的 adaptChatStore.listMessages 共用本构造器；
   // 放最后，保证既有条件与参数顺序逐字不变。
   conditions.push(REVERTED_BATCH_GUARD);
-  return { join, where: `WHERE ${conditions.join(" AND ")}`, params };
+  return { join: joins.join(" "), where: `WHERE ${conditions.join(" AND ")}`, params };
 }

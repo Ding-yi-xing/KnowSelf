@@ -7,6 +7,7 @@ import type {
   WechatSendLookupResult,
   WechatSendResult,
   WechatUnreadMessage,
+  WechatRecentMessage,
 } from "./wechat-assist-adapter.js";
 import { WechatTransportError } from "./wechat-assist-adapter.js";
 
@@ -14,10 +15,28 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const STOP_TIMEOUT_MS = 500;
 const MAX_LINE_LENGTH = 1_048_576;
 
+/**
+ * 每个方法的桥接超时。打开会话、首次解密数据库都可能超过 5 秒，发送还要等
+ * 输入回读与数据库确认；统一用一个短超时会把正常发送误判为失败。
+ */
+const METHOD_TIMEOUT_MS: Record<BridgeMethod, number> = {
+  probe_capabilities: 15_000,
+  probe_idle: 5_000,
+  inspect_current_conversation: 60_000,
+  open_conversation: 120_000,
+  list_unread_messages: 60_000,
+  list_recent_messages: 60_000,
+  send_message: 180_000,
+  lookup_send_result: 30_000,
+};
+
 type BridgeMethod =
   | "probe_capabilities"
+  | "probe_idle"
   | "inspect_current_conversation"
+  | "open_conversation"
   | "list_unread_messages"
+  | "list_recent_messages"
   | "send_message"
   | "lookup_send_result";
 
@@ -61,6 +80,18 @@ export interface WindowsWechatTransportOptions {
   bridgePath?: string;
   requestTimeoutMs?: number;
   spawnProcess?: (command: string, args: string[], options: SpawnOptions) => SpawnedBridge;
+  /**
+   * 静默发送（默认 true）：UIA 直接写输入框 + 后台回车，不抢前台、不动鼠标、不覆盖剪贴板。
+   * 失败时 bridge 会自动退回原来的前台点击路径（并把焦点/光标还原）。
+   */
+  quietSend?: boolean;
+  /**
+   * 发送前要求用户空闲多少毫秒（默认 60000）。你在打字时不抢窗口；
+   * 只有你停下来/离开电脑时才会真正操作微信。
+   */
+  quietMinIdleMs?: number;
+  /** 为了等空闲最多拖多久（默认 120000）；等不到也照发，避免回复无限延期。 */
+  quietMaxWaitMs?: number;
 }
 
 function defaultBridgePath(): string {
@@ -142,6 +173,26 @@ function parseUnreadMessages(value: unknown): WechatUnreadMessage[] {
   });
 }
 
+function parseRecentMessages(value: unknown): WechatRecentMessage[] {
+  if (!Array.isArray(value)) throw new Error("recent_messages must be an array");
+  return value.map((item, index) => {
+    const record = requireRecord(item, `recent_messages[${index}]`);
+    const role = record.role;
+    if (role !== "me" && role !== "them") throw new Error(`recent_messages[${index}].role is invalid`);
+    const tsMs = record.ts_ms;
+    if (tsMs !== undefined && typeof tsMs !== "number") throw new Error(`recent_messages[${index}].ts_ms must be a number`);
+    return {
+      message_id: requireString(record, "message_id", `recent_messages[${index}]`),
+      conversation_id: requireString(record, "conversation_id", `recent_messages[${index}]`),
+      sender_id: requireString(record, "sender_id", `recent_messages[${index}]`),
+      role,
+      body: requireString(record, "body", `recent_messages[${index}]`),
+      received_at: requireString(record, "received_at", `recent_messages[${index}]`),
+      ...(tsMs === undefined ? {} : { ts_ms: tsMs }),
+    };
+  });
+}
+
 function parseSendResult(value: unknown): WechatSendResult {
   const record = requireRecord(value, "send_result");
   const externalId = record.external_id;
@@ -200,6 +251,9 @@ export function createWindowsWechatTransport(
       ? ["-3", bridgePath]
       : [bridgePath]
   );
+  const quietSend = options.quietSend ?? true;
+  const quietMinIdleMs = Math.max(0, options.quietMinIdleMs ?? 60_000);
+  const quietMaxWaitMs = Math.max(0, options.quietMaxWaitMs ?? 120_000);
 
   let child: SpawnedBridge | undefined;
   let lineBuffer = "";
@@ -268,6 +322,7 @@ export function createWindowsWechatTransport(
       nextChild = spawnProcess(pythonExecutable, pythonArgs, {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
       });
     } catch (error) {
       throw new WechatTransportError(
@@ -324,12 +379,13 @@ export function createWindowsWechatTransport(
     const processHandle = ensureChild();
     const id = `wechat-${++requestSequence}`;
     const message: BridgeRequest = { id, method, params };
+    const timeoutMs = options.requestTimeoutMs ?? METHOD_TIMEOUT_MS[method] ?? requestTimeoutMs;
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
         terminateChild();
         reject(new WechatTransportError(`WeChat bridge request timed out: ${method}`, "timeout"));
-      }, requestTimeoutMs);
+      }, timeoutMs);
       pending.set(id, { timer, resolve, reject });
       try {
         processHandle.stdin.write(JSON.stringify(message) + "\n");
@@ -345,6 +401,54 @@ export function createWindowsWechatTransport(
     });
   };
 
+  /**
+   * 等你空闲下来再动微信（静默模式的核心闸门）。
+   *
+   * 为什么需要：切会话这一步在微信 4.x 只能靠点击，会短暂把微信顶到前台。
+   * 只要你还在键盘/鼠标上，这 1~2 秒就会被打断（正在打字时最明显）。所以：
+   *   - 空闲 ≥ quietMinIdleMs（默认 60s）→ 立刻动手；
+   *   - 否则每 3 秒看一次，最多等到 quietMaxWaitMs（默认 2 分钟）→ 等不到也照发，
+   *     避免回复被无限延期（真人也会隔几分钟才回）。
+   * 探测失败（bridge 未就绪等）不阻塞发送：宁可发，也不要卡住。
+   */
+  const waitForUserIdle = async (): Promise<void> => {
+    if (quietMinIdleMs <= 0) return;
+    const deadline = Date.now() + quietMaxWaitMs;
+    for (;;) {
+      let idleMs = quietMinIdleMs;
+      try {
+        const raw = await request("probe_idle", {});
+        idleMs = isRecord(raw) && typeof raw.idle_seconds === "number"
+          ? Math.round(raw.idle_seconds * 1000)
+          : 0;
+      } catch {
+        return;
+      }
+      if (idleMs >= quietMinIdleMs) return;
+      if (Date.now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+    }
+  };
+
+  /**
+   * 目标会话是不是**已经**停在微信前台那个会话上。
+   *
+   * 已停在该会话 → 发送不需要切会话、不会抢前台，可以跳过空闲闸门直接发；
+   * 探测失败一律当「不是」，退回原来「等你空闲」的保守路径（fail-safe）。
+   */
+  const targetConversationOpen = async (contactId: string): Promise<boolean> => {
+    try {
+      const current = parseConversation(await request("inspect_current_conversation", {}));
+      if (current === null) return false;
+      const target = contactId.startsWith("wechat:") ? contactId.slice("wechat:".length) : contactId;
+      return current.conversation_id === target
+        || current.conversation_id.endsWith(`:${target}`)
+        || current.visible_name === target;
+    } catch {
+      return false;
+    }
+  };
+
   return {
     async probeCapabilities() {
       try {
@@ -356,14 +460,30 @@ export function createWindowsWechatTransport(
     async inspectCurrentConversation() {
       return parseConversation(await request("inspect_current_conversation", {}));
     },
-    async listUnreadMessages() {
-      return parseUnreadMessages(await request("list_unread_messages", {}));
+    async prepareTarget(contactId: string) {
+      const conversation = parseConversation(await request("open_conversation", { contact_id: contactId }));
+      if (conversation === null) {
+        throw new WechatTransportError("WeChat bridge did not report an open conversation", "window_changed", "not_sent");
+      }
+      return conversation;
+    },
+    async listUnreadMessages(contactId: string, sinceTsMs?: number) {
+      return parseUnreadMessages(await request("list_unread_messages", {
+        contact_id: contactId,
+        ...(sinceTsMs === undefined ? {} : { since_ts_ms: sinceTsMs }),
+      }));
+    },
+    async listRecentMessages(contactId: string, limit = 20) {
+      return parseRecentMessages(await request("list_recent_messages", { contact_id: contactId, limit }));
     },
     async sendMessage(input) {
       if (input.contact_id.trim() === "" || input.body.trim() === "" || input.idempotency_key.trim() === "") {
         throw new WechatTransportError("WeChat send input is incomplete", "send_failed", "not_sent");
       }
-      return parseSendResult(await request("send_message", input));
+      // 空闲闸门只在「需要切换会话」时才等：目标会话已经开着时发送不碰前台，
+      // 再为了等你空闲把回复拖 1~2 分钟，就和「回消息马上回」冲突了。
+      if (quietSend && !await targetConversationOpen(input.contact_id)) await waitForUserIdle();
+      return parseSendResult(await request("send_message", { ...input, quiet: quietSend }));
     },
     async lookupSendResult(idempotencyKey) {
       if (idempotencyKey.trim() === "") {

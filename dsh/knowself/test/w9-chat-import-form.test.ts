@@ -11,12 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SourcesAddForm } from "../src/client/sources-add-form.js";
-import { CHAT_IMPORT_PLATFORMS } from "../src/client/chat-import-port.js";
+import { WechatKeyRequiredError } from "../src/client/chat-import-port.js";
 import type { ChatImportPort } from "../src/client/chat-import-port.js";
-// 契约的**真实值域**：从源码引入，而不是 `import … from "@knowself/contracts"`。
-// 原因：包入口指向 `dist/*`，而本轮不重建 contracts（实测 `dist.ChatPlatformSchema === undefined`），
-// 走包入口会拿到 undefined、断言直接 TypeError。源码引入能让防漂移断言在 dist 更新前就生效。
-import { ChatPlatformSchema } from "../../../packages/contracts/src/chat.js";
 
 afterEach(() => {
   cleanup();
@@ -74,6 +70,30 @@ describe("导入聊天记录 tab（W-9 B）", () => {
     expect(port.importChat).not.toHaveBeenCalled();
   });
 
+  it("没有新增 proposal 时回执说明「已是最新」，不显示『全部采纳本批』", async () => {
+    const port = chatPort({
+      importChat: vi.fn(async () => ({
+        source_id: "src-none",
+        batch_id: "b-none",
+        conversations: 1,
+        messages: { parsed: 100, committed: 0, ignored: 100, unattributed: 0 },
+        persons_created: 0,
+        auto_committed: 0,
+        proposals_created: 0,
+        wechat: { db_dir: "C:\\x", key_source: "reused", summary: { newest_message_at: "2026-07-22T19:56:00.000Z" } },
+        snapshot_id: null,
+        nodes: null,
+        edges: null,
+      })),
+    } as never);
+    const { input } = renderChat(port);
+    fireEvent.change(input, { target: { value: "C:\\Data\\xwechat_files" } });
+    fireEvent.click(screen.getByTestId("sources-submit"));
+    const receipt = await screen.findByTestId("sources-chat-receipt");
+    expect(receipt.textContent).toContain("没有新增消息");
+    expect(screen.queryByTestId("sources-chat-accept-batch")).toBeNull();
+  });
+
   it("auto_commit=false → 回执「等待确认」+【全部采纳本批】", async () => {
     const port = chatPort();
     const { input } = renderChat(port);
@@ -84,10 +104,9 @@ describe("导入聊天记录 tab（W-9 B）", () => {
     const receipt = await screen.findByTestId("sources-chat-receipt");
     expect(receipt.textContent).toContain("已导入 40 条，等待确认");
     expect(screen.getByTestId("sources-chat-accept-batch")).toBeDefined();
-    // 传的参数里没有 auto_commit；W-34-T02 起请求体固定带 platform（默认 wechat）
+    // 传的参数里没有 auto_commit；请求体用 wechat_root（解密/导出由服务端完成）
     expect((port.importChat as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0]).toEqual({
-      source_path: "C:\\dsh-lab\\tmp\\w9-fixture",
-      platform: "wechat",
+      wechat_root: "C:\\dsh-lab\\tmp\\w9-fixture",
     });
   });
 
@@ -193,80 +212,36 @@ describe("导入聊天记录 tab（W-9 B）", () => {
 });
 
 /**
- * W-34-T02：来源平台三选一（微信可用 / QQ·抖音占位）。
+ * 2026-11-16：只保留微信一个来源；不再有 QQ/抖音 平台 pill。
  *
- * 为什么 QQ/抖音 用 `aria-disabled` 而不是原生 `disabled`：
- * 需求同时要求「(a) 按钮处于禁用语义」和「(b) 选中 QQ 后提交不发请求」。
- * 原生 disabled 的按钮在浏览器与 jsdom 里**连 click 事件都不派发**（实测 onClick 调用 0 次），
- * 于是 (b) 永远不可达、只能写个空断言。用 aria-disabled 保住对辅助技术的禁用语义，
- * 同时让「点了会选中 → 提交置灰 → 不发请求」这条真实链路可被测到。
+ * 2026-11-17：密钥改为从**运行中的微信进程**只读提取，前端不再有「重启微信抓密钥」
+ * 二次确认（那条路在微信 4.2 上抓不到密钥，表现为「重启完微信后一直没反应」）。
+ * 409 时把服务端的中文原因直接显示出来，且不自动重试。
  */
-describe("聊天导入平台三选一（W-34-T02）", () => {
-  /**
-   * **防漂移**：客户端那份平台清单是 contracts 的镜像（因为本轮不重建 contracts/dist）。
-   * 两份真相源迟早会漂——契约加一个平台、镜像忘改，用户会在 UI 上看到一个"选不了"的平台，
-   * 或者服务端闸放行一个 UI 根本没有的取值。这条断言把两者钉死（含**顺序**）。
-   */
-  it("本地平台镜像与 contracts 的 ChatPlatformSchema 值域一致（防漂移）", () => {
-    expect([...CHAT_IMPORT_PLATFORMS]).toEqual([...ChatPlatformSchema.options]);
-  });
-
-  it("三个平台 pill 都在；微信默认选中；QQ/抖音 aria-disabled 且无承诺式文案", () => {
+describe("微信导入：单一来源与密钥错误提示", () => {
+  it("不再显示平台 pill，输入框说明指向 xwechat_files", () => {
     renderChat(chatPort());
 
-    const wechat = screen.getByTestId("sources-chat-platform-wechat");
-    const qq = screen.getByTestId("sources-chat-platform-qq");
-    const douyin = screen.getByTestId("sources-chat-platform-douyin");
-    expect(wechat).toBeDefined();
-    expect(qq).toBeDefined();
-    expect(douyin).toBeDefined();
-
-    // 微信默认选中
-    expect(wechat.getAttribute("aria-pressed")).toBe("true");
-    expect(qq.getAttribute("aria-pressed")).toBe("false");
-    expect(douyin.getAttribute("aria-pressed")).toBe("false");
-
-    // QQ / 抖音：禁用语义 + 「暂未开放」
-    expect(qq.getAttribute("aria-disabled")).toBe("true");
-    expect(douyin.getAttribute("aria-disabled")).toBe("true");
-    expect(screen.getByText(/暂未开放/)).toBeDefined();
-
-    // 禁止承诺式文案（已定：那是承诺，用户会来催）
-    expect(screen.queryByText(/即将支持/)).toBeNull();
-    expect(screen.queryByText(/敬请期待/)).toBeNull();
-    expect(screen.queryByText(/coming soon/i)).toBeNull();
+    expect(screen.queryByTestId("sources-chat-platform-qq")).toBeNull();
+    expect(screen.queryByTestId("sources-chat-platform-douyin")).toBeNull();
+    expect(screen.getAllByText(/xwechat_files/).length).toBeGreaterThan(0);
   });
 
-  it("选 QQ → 提交按钮置灰，且**不发任何请求**", () => {
-    const port = chatPort();
+  it("缺密钥（409）→ 直接显示可操作错误，不弹重启对话框、不重试", async () => {
+    const importChat = vi
+      .fn()
+      .mockRejectedValueOnce(new WechatKeyRequiredError("请先登录微信并保持窗口打开"));
+    const port = chatPort({ importChat } as never);
     const { input } = renderChat(port);
-    fireEvent.change(input, { target: { value: "C:\\dsh-lab\\tmp\\w9-fixture" } });
 
-    fireEvent.click(screen.getByTestId("sources-chat-platform-qq"));
-    expect(screen.getByTestId("sources-chat-platform-qq").getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("sources-chat-platform-wechat").getAttribute("aria-pressed")).toBe("false");
-
-    const submit = screen.getByTestId("sources-submit") as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-
-    fireEvent.click(submit);
-    expect(port.importChat).not.toHaveBeenCalled();
-  });
-
-  it("切回微信 → 提交恢复可用，并真的发出 platform=wechat 的请求", async () => {
-    const port = chatPort();
-    const { input } = renderChat(port);
-    fireEvent.change(input, { target: { value: "C:\\dsh-lab\\tmp\\w9-fixture" } });
-
-    fireEvent.click(screen.getByTestId("sources-chat-platform-qq"));
-    fireEvent.click(screen.getByTestId("sources-chat-platform-wechat"));
-    expect((screen.getByTestId("sources-submit") as HTMLButtonElement).disabled).toBe(false);
-
+    fireEvent.change(input, { target: { value: "C:\\Data\\xwechat_files" } });
     fireEvent.click(screen.getByTestId("sources-submit"));
-    await waitFor(() => expect(port.importChat).toHaveBeenCalledTimes(1));
-    expect((port.importChat as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0]).toEqual({
-      source_path: "C:\\dsh-lab\\tmp\\w9-fixture",
-      platform: "wechat",
-    });
+
+    const alert = await screen.findByTestId("sources-add-error");
+    expect(alert.textContent).toContain("请先登录微信");
+    expect(screen.queryByTestId("wechat-key-capture-dialog")).toBeNull();
+    // 不再带 capture_key 重试：只发一次请求，且请求体里没有该字段
+    expect(importChat).toHaveBeenCalledTimes(1);
+    expect(importChat.mock.calls[0]![0]).toEqual({ wechat_root: "C:\\Data\\xwechat_files" });
   });
 });

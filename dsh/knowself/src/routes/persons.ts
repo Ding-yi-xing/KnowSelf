@@ -92,6 +92,9 @@ function buildPersonListQuery(q: URLSearchParams): PersonListQuery {
   const keyword = q.get("keyword");
   if (keyword !== null) query.keyword = keyword;
 
+  const directOnly = q.get("direct_only");
+  if (directOnly === "1" || directOnly === "true") query.direct_only = true;
+
   const limit = parseNonNegativeInt(q.get("limit"), "limit");
   if (limit !== undefined) query.limit = limit;
 

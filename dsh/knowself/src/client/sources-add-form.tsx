@@ -18,9 +18,9 @@ import { useState } from "react";
 import type { CSSProperties, FormEvent, ReactElement } from "react";
 import type { CreateSourceInput } from "@knowself/contracts";
 import type { KnowselfProfilePort } from "./profile-port.js";
-import { CHAT_IMPORT_PLATFORMS, createChatImportPort, validateLocalPath } from "./chat-import-port.js";
+import { createChatImportPort, validateLocalPath } from "./chat-import-port.js";
 import { SourcesChatReceipt } from "./sources-chat-receipt.js";
-import type { AcceptBatchResult, ChatImportPlatform, ChatImportPort, ChatImportResult } from "./chat-import-port.js";
+import type { AcceptBatchResult, ChatImportPort, ChatImportResult } from "./chat-import-port.js";
 import { PANEL_COLORS, WRAP_TEXT } from "./panel-states.js";
 
 export interface SourcesAddFormProps {
@@ -66,34 +66,6 @@ const TABS: ReadonlyArray<{ key: Tab; label: string; testId: string }> = [
 ];
 const tabStyle = (active: boolean): CSSProperties => ({ ...S.btn, border: `1px solid ${active ? PANEL_COLORS.accent : PANEL_COLORS.border}`, background: active ? PANEL_COLORS.accentBg : PANEL_COLORS.surface, color: active ? PANEL_COLORS.accentText : PANEL_COLORS.text });
 
-const PLATFORM_LABELS: Readonly<
-  Record<ChatImportPlatform, { label: string; available: boolean }>
-> = {
-  wechat: { label: "微信", available: true },
-  qq: { label: "QQ", available: false },
-  douyin: { label: "抖音", available: false },
-};
-
-/**
- * 平台 pill 的数据表：**键来自 `CHAT_IMPORT_PLATFORMS`**（值域单一来源），文案来自上面的
- * 穷举 `Record`。两处配合的效果：`CHAT_IMPORT_PLATFORMS` 加了平台却没配文案 → 编译失败；
- * 契约改了镜像忘了改 → `w9-chat-import-form.test.ts` 的防漂移断言红。
- *
- * `available=false` 表示解析器尚未实现 —— 这类 pill **必须 aria-disabled 且可点**：
- * 点了会选中并让提交按钮置灰、不发请求，用户能看懂"为什么点了不能提交"。原生 `disabled`
- * 的按钮点下去连事件都不触发，属于本清单反复禁止的"点了没反应的死按钮"；更危险的是
- * 用户会以为自己在导 QQ、实际提交的是微信（见 W-34-T02 裁决）。
- */
-const PLATFORMS: ReadonlyArray<{ key: ChatImportPlatform; label: string; available: boolean }> =
-  CHAT_IMPORT_PLATFORMS.map((key) => ({ key, ...PLATFORM_LABELS[key] }));
-
-/** 平台 pill 的三种态样式（选中 / 可选未选中 / 未开放）。 */
-const platformStyle = (active: boolean, available: boolean): CSSProperties => ({
-  ...S.btn,
-  border: `1px solid ${active ? PANEL_COLORS.accent : PANEL_COLORS.border}`,
-  background: active ? PANEL_COLORS.accentBg : PANEL_COLORS.surface,
-  color: active ? PANEL_COLORS.accentText : available ? PANEL_COLORS.text : PANEL_COLORS.muted,
-});
 function Field({ label, children }: { label: string; children: ReactElement }): ReactElement {
   return <label style={S.label}>{label}{children}</label>;
 }
@@ -111,10 +83,8 @@ export function SourcesAddForm({
   const [title, setTitle] = useState<string>(""); const [text, setText] = useState<string>("");
   const [url, setUrl] = useState<string>(""); const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false); const [error, setError] = useState<string | null>(null);
-  /** W-9：聊天导入 */
+  /** W-9：微信聊天记录文件夹（xwechat_files）。 */
   const [chatPath, setChatPath] = useState<string>("");
-  /** W-34-T02：导入平台（默认微信；QQ/抖音解析器未实现，选中后不允许提交）。 */
-  const [platform, setPlatform] = useState<ChatImportPlatform>("wechat");
   const [autoCommit, setAutoCommit] = useState<boolean>(false);
   const [autoCommitReason, setAutoCommitReason] = useState<string>("");
   const [receipt, setReceipt] = useState<ChatImportResult | null>(null);
@@ -140,15 +110,12 @@ export function SourcesAddForm({
     return { kind: "file", title: file.name, mime_type: mime, content_base64: await readAsBase64(file) };
   };
 
-  /** 聊天导入：路径校验 → 调端点 → 展示三选回执（不立刻 onDone，否则回执消失）。 */
-  const submitChatImport = async (): Promise<void> => {
-    // 平台闸（前端第二道）：QQ/抖音的解析器未实现，**一个请求都不发**。
-    // 服务端同样有闸（400 PLATFORM_NOT_SUPPORTED），这里提前拦是为了不让用户白等一次往返。
-    // 保留 throw 而不是静默 return：表单按 Enter 提交时会绕过 disabled 的提交按钮，
-    // 那时必须给用户一句可读的话，而不是"点了没反应"。
-    if (platform !== "wechat") {
-      throw new Error(`${platform === "qq" ? "QQ" : "抖音"} 的导入暂未开放`);
-    }
+  /**
+   * 聊天导入：路径校验 → dsh 内部取密钥/解密/导出 → 导入。
+   *
+   * 微信保持登录、窗口打开即可（不退出、不重启）；密钥由服务端从微信进程只读提取。
+   */
+  const runChatImport = async (): Promise<void> => {
     const invalid = validateLocalPath(chatPath);
     if (invalid !== null) throw new Error(invalid);
     if (autoCommit && autoCommitReason.trim() === "") {
@@ -156,8 +123,7 @@ export function SourcesAddForm({
     }
     const client = chatImport ?? createChatImportPort();
     const result = await client.importChat({
-      source_path: chatPath.trim(),
-      platform,
+      wechat_root: chatPath.trim(),
       ...(autoCommit
         ? { auto_commit: true, auto_commit_reason: autoCommitReason.trim() }
         : {}),
@@ -165,6 +131,10 @@ export function SourcesAddForm({
     setReceipt(result);
     setAcceptResult(null);
     if (result.auto_committed > 0) onMiningRefresh?.();
+  };
+
+  const submitChatImport = async (): Promise<void> => {
+    await runChatImport();
   };
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -236,38 +206,14 @@ export function SourcesAddForm({
       )}
       {tab === "chat" && receipt === null && (
         <>
-          {/* W-34-T02：来源平台三选一。微信可用；QQ/抖音为占位（点得动、能选中、但提交被拦） */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, color: PANEL_COLORS.text }}>平台</span>
-            {PLATFORMS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                data-testid={`sources-chat-platform-${item.key}`}
-                aria-pressed={platform === item.key}
-                {...(item.available ? {} : { "aria-disabled": "true" })}
-                disabled={submitting}
-                onClick={() => {
-                  setPlatform(item.key);
-                  setError(null);
-                }}
-                style={platformStyle(platform === item.key, item.available)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <p style={{ fontSize: 12, color: PANEL_COLORS.muted, margin: "0 0 8px", ...WRAP_TEXT }}>
-            QQ / 抖音：暂未开放
-          </p>
-          <Field label="聊天导出目录（必填）">
+          <Field label="微信聊天记录文件夹（xwechat_files，必填）">
             <input data-testid="sources-chat-path" type="text" value={chatPath}
-              placeholder="示例：C:\\Users\\你\\Documents\\聊天导出"
+              placeholder="示例：C:\\Users\\你\\Documents\\xwechat_files"
               onChange={(event) => { setChatPath(event.currentTarget.value); setError(validateLocalPath(event.currentTarget.value)); }}
               {...inp()} />
           </Field>
           <p style={{ fontSize: 12, color: PANEL_COLORS.muted, margin: "0 0 8px", ...WRAP_TEXT }}>
-            仅支持本地目录（填网址会被拦下）。
+            选到 xwechat_files 即可；保持微信登录、窗口打开，dsh 会自动发现账号、读取密钥、解密并导入（不需要退出或重启微信）。
           </p>
           <label style={{ ...S.label, display: "flex", alignItems: "center", gap: 6 }}>
             <input data-testid="sources-chat-auto-commit" type="checkbox" checked={autoCommit}
@@ -298,7 +244,7 @@ export function SourcesAddForm({
       )}
       <div style={{ display: "flex", gap: 8 }}>
         <button type="submit" data-testid="sources-submit"
-          disabled={submitting || (tab === "chat" && platform !== "wechat")}
+          disabled={submitting}
           style={{ ...S.btn, padding: "5px 14px", cursor: submitting ? "default" : "pointer", border: `1px solid ${PANEL_COLORS.accent}`, background: PANEL_COLORS.accentBg, color: PANEL_COLORS.accentText }}>
           {submitting ? "提交中…" : tab === "chat" ? "开始导入" : "提交"}
         </button>

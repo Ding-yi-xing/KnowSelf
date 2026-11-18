@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import type { PersonPanelRow } from "./data-port.js";
 import type { PersonWritePort } from "./person-write-port.js";
+import { ConfirmDialog, Modal } from "./modal.js";
 
 /** 行内按钮能要求本组件打开的动作。 */
 export type PersonActionRequestKind = "rename" | "merge" | "delete";
@@ -322,103 +323,96 @@ export function PersonActions({
         </p>
       )}
 
-      {dialog === "merge" && (
-        <div
-          data-testid="person-merge-dialog"
-          style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 6, padding: 10 }}
-        >
-          <p style={{ fontSize: 12, margin: "0 0 8px", color: "#374151" }}>
-            把「{person.display_name}」合并到（搜索选择目标，不可撤销）：
-          </p>
-          <input
-            data-testid="person-merge-search"
-            placeholder="输入名字搜索…"
-            value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
-            style={{ ...INPUT, width: "100%", marginBottom: 8 }}
-          />
-          <ul style={{ listStyle: "none", margin: "0 0 8px", padding: 0 }}>
-            {candidates.map((row) => (
-              <li key={row.person_id} style={{ marginBottom: 4 }}>
-                <button
-                  type="button"
-                  data-testid={`person-merge-candidate-${row.person_id}`}
-                  onClick={() => setTarget(row)}
-                  aria-pressed={target?.person_id === row.person_id}
-                  style={{
-                    ...BTN,
-                    width: "100%",
-                    textAlign: "left",
-                    borderColor: target?.person_id === row.person_id ? "#2563eb" : "#d1d5db",
-                    background: target?.person_id === row.person_id ? "#eff6ff" : "#fff",
-                  }}
-                >
-                  {row.display_name}
-                  <span style={{ color: "#6b7280", marginLeft: 6 }}>{row.msg_count} 条消息</span>
-                </button>
-              </li>
-            ))}
-            {keyword.trim() !== "" && candidates.length === 0 && (
-              <li style={{ fontSize: 12, color: "#6b7280" }}>没有匹配的人物。</li>
-            )}
-          </ul>
-          {target !== null && (
-            <p data-testid="person-merge-consequence" style={{ fontSize: 12, color: "#b91c1c", margin: "0 0 8px" }}>
-              合并后「{person.display_name}」的 {person.msg_count} 条消息将归到「{target.display_name}」，
-              此人会被标记为已合并，不可撤销。
-            </p>
-          )}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              data-testid="person-merge-confirm"
-              disabled={target === null || busy}
-              onClick={() => {
-                if (target === null) return;
-                const targetId = target.person_id;
-                void run(
-                  async () => writePort.mergePerson(person.person_id, targetId, "manual-merge"),
-                  targetId,
-                );
-              }}
-              style={BTN}
-            >
-              确认合并
-            </button>
-            <button type="button" onClick={() => setDialog(null)} style={BTN}>
-              取消
-            </button>
-          </div>
-        </div>
-      )}
-
-      {dialog === "delete" && (
-        <div
-          data-testid="person-delete-dialog"
-          style={{ marginTop: 12, border: "1px solid #fca5a5", borderRadius: 6, padding: 10 }}
-        >
-          <p style={{ fontSize: 12, color: "#b91c1c", margin: "0 0 8px" }}>
-          归档「{person.display_name}」？该人物将不再出现在默认列表与图谱分析中，
-          <strong>历史消息不会被删除</strong>（本系统没有物理删除）。
+      <Modal
+        open={dialog === "merge"}
+        title="合并人物"
+        onClose={() => setDialog(null)}
+        testId="person-merge-dialog"
+        width={520}
+      >
+        <p style={{ fontSize: 12, margin: "0 0 8px", color: "#374151" }}>
+          把「{person.display_name}」合并到（搜索选择目标，不可撤销）：
         </p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              data-testid="person-delete-confirm"
-              disabled={busy}
-              onClick={() => {
-                void run(async () => writePort.archivePerson(person.person_id), null);
-              }}
-              style={{ ...BTN, borderColor: "#fca5a5", color: "#b91c1c" }}
-            >
-              确认归档
-            </button>
-            <button type="button" onClick={() => setDialog(null)} style={BTN}>
-              取消
-            </button>
-          </div>
+        <input
+          data-testid="person-merge-search"
+          placeholder="输入名字搜索…"
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+          style={{ ...INPUT, width: "100%", marginBottom: 8 }}
+        />
+        <ul style={{ listStyle: "none", margin: "0 0 8px", padding: 0 }}>
+          {candidates.map((row) => (
+            <li key={row.person_id} style={{ marginBottom: 4 }}>
+              <button
+                type="button"
+                data-testid={`person-merge-candidate-${row.person_id}`}
+                onClick={() => setTarget(row)}
+                aria-pressed={target?.person_id === row.person_id}
+                style={{
+                  ...BTN,
+                  width: "100%",
+                  textAlign: "left",
+                  borderColor: target?.person_id === row.person_id ? "#2563eb" : "#d1d5db",
+                  background: target?.person_id === row.person_id ? "#eff6ff" : "#fff",
+                }}
+              >
+                {row.display_name}
+                <span style={{ color: "#6b7280", marginLeft: 6 }}>{row.direct_msg_count ?? row.msg_count} 条直聊消息</span>
+              </button>
+            </li>
+          ))}
+          {keyword.trim() !== "" && candidates.length === 0 && (
+            <li style={{ fontSize: 12, color: "#6b7280" }}>没有匹配的人物。</li>
+          )}
+        </ul>
+        {target !== null && (
+          <p data-testid="person-merge-consequence" style={{ fontSize: 12, color: "#b91c1c", margin: "0 0 8px" }}>
+            合并后「{person.display_name}」的 {person.direct_msg_count ?? person.msg_count} 条直聊消息将归到「{target.display_name}」，
+            此人会被标记为已合并，不可撤销。
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            data-testid="person-merge-confirm"
+            disabled={target === null || busy}
+            onClick={() => {
+              if (target === null) return;
+              const targetId = target.person_id;
+              void run(
+                async () => writePort.mergePerson(person.person_id, targetId, "manual-merge"),
+                targetId,
+              );
+            }}
+            style={BTN}
+          >
+            确认合并
+          </button>
+          <button type="button" onClick={() => setDialog(null)} style={BTN}>
+            取消
+          </button>
         </div>
-      )}
+      </Modal>
+
+      <ConfirmDialog
+        open={dialog === "delete"}
+        title="归档人物"
+        danger
+        busy={busy}
+        message={
+          <>
+            归档「{person.display_name}」？该人物将不再出现在默认列表与图谱分析中，
+            <strong>历史消息不会被删除</strong>（本系统没有物理删除）。
+          </>
+        }
+        confirmLabel="确认归档"
+        onCancel={() => setDialog(null)}
+        onConfirm={() => {
+          void run(async () => writePort.archivePerson(person.person_id), null);
+        }}
+        testId="person-delete-dialog"
+        confirmTestId="person-delete-confirm"
+      />
     </section>
   );
 }

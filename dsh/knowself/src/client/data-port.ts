@@ -31,11 +31,47 @@ export type PersonTimelineQuery = NonNullable<
 /** 事件时间线返回行（`EventRow[]` 的元素类型，由领域库签名推导）。 */
 export type PersonPanelEvent = ReturnType<PersonStore["events"]["timeline"]>[number];
 
-/** 时间线返回（复用领域库签名推导）。 */
-export type PersonTimelineResult = ReturnType<PersonStore["events"]["timeline"]>;
+/** 没有挖掘事件时用于最近互动的原始聊天消息投影。 */
+export interface PersonPanelMessageInteraction {
+  kind: "message";
+  message_id: string;
+  conversation_id: string;
+  sender_name: string;
+  role: "me" | "other" | "system";
+  ts_ms: number;
+  msg_date: string;
+  content: string;
+  content_type: string;
+}
+
+/** 最近互动：优先关系事件，缺失时回退为明确标识的原始消息。 */
+export type PersonTimelineResult = Array<PersonPanelEvent | PersonPanelMessageInteraction>;
 
 /** 面板展示的人物行（复用领域库导出类型，不重复定义）。 */
 export type PersonPanelRow = PersonRow;
+
+/** 群聊列表行（只取面板需要的真实字段）。 */
+export interface PersonPanelGroup {
+  conversation_id: string;
+  title: string;
+  member_count: number;
+  msg_count: number;
+  first_msg_at: string | null;
+  last_msg_at: string | null;
+}
+
+/** 群消息行（与人物时间线的消息形态一致）。 */
+export interface PersonPanelGroupMessage {
+  kind: "message";
+  message_id: string;
+  conversation_id: string;
+  sender_name: string;
+  role: "me" | "other" | "system";
+  ts_ms: number;
+  msg_date: string;
+  content: string;
+  content_type: string;
+}
 
 /**
  * 人物面板只读数据端口。
@@ -51,6 +87,13 @@ export interface PersonPanelDataPort {
     personId: string,
     q?: PersonTimelineQuery,
   ): PersonTimelineResult | Promise<PersonTimelineResult>;
+  /** 群聊目录（按最近消息倒序）。 */
+  listGroups?(q?: { limit?: number }): PersonPanelGroup[] | Promise<PersonPanelGroup[]>;
+  /** 群消息（最新优先）。 */
+  groupTimeline?(
+    groupId: string,
+    q?: { limit?: number },
+  ): PersonPanelGroupMessage[] | Promise<PersonPanelGroupMessage[]>;
 }
 
 /**
@@ -61,6 +104,8 @@ export const UNAVAILABLE_PORT: PersonPanelDataPort = {
   listPersons: () => [],
   getPerson: () => null,
   timeline: () => [],
+  listGroups: () => [],
+  groupTimeline: () => [],
 };
 
 let activePort: PersonPanelDataPort | undefined;

@@ -49,6 +49,7 @@ function makeFactories(overrides: Partial<ServiceFactories> = {}): ServiceFactor
     journal: { get: () => ({ date: "", records: [] }) },
     proposals: { listByStatus: () => [] },
     sources: { list: () => ({ items: [], total: 0 }) },
+    wechatAssist: { recoverInterruptedWork: () => ({ tasks: 0, turns: 0, sends: 0 }) },
     write: () => {},
   };
   const personStore = {
@@ -212,7 +213,7 @@ describe("W3/T05：三层分段降级", () => {
     console.log(
       `[w3-report] 场景1 注册数=${names.length} 工具=${names.join(",")}`,
     );
-    expect(names).toHaveLength(11);
+    expect(names).toHaveLength(12);
     for (const name of [
       "knowself_search",
       "knowself_ingest",
@@ -337,6 +338,7 @@ describe("W3/T05：三层分段降级", () => {
       "knowself_person_events",
       "knowself_metrics",
       "knowself_network",
+      "knowself_chat_messages",
       "knowself_import_chat",
     ]) {
       expect(names).not.toContain(name);
@@ -422,7 +424,7 @@ describe("W3/T05：三层分段降级", () => {
     expect(registered).toHaveLength(0);
   });
 
-  it("场景5：全层成功 → 16 个工具全注册、degraded.missing 为空、REST 桥注册", async () => {
+  it("场景5：全层成功 → 17 个工具全注册、degraded.missing 为空、REST 桥注册", async () => {
     const services = await assembleServices("/tmp/w3", makeFactories());
     expect(services.degraded?.missing).toEqual([]);
     expect(services.degraded?.reasons).toEqual([]);
@@ -433,17 +435,17 @@ describe("W3/T05：三层分段降级", () => {
     console.log(
       `[w3-report] 场景5 注册数=${names.length} 工具=${names.join(",")}`,
     );
-    expect(names).toHaveLength(16);
+    expect(names).toHaveLength(17);
     // W-1：全层成功时读桥 + 写桥都注册（2 条），见 makeCtx 分流注释。
     expect(h.webRoutes()).toBe(2);
     expect(h.errorArgs()).toHaveLength(0);
     // makeTools 直接调用（既有调用方）行为不回退
-    expect(makeTools(services)).toHaveLength(16);
+    expect(makeTools(services)).toHaveLength(17);
   });
 });
 
 describe("W3/T05：既有测试桩（无 degraded 字段）行为不回退", () => {
-  it("degraded 缺失时 makeTools 视为全层可用，仍返回 16 个工具", () => {
+  it("degraded 缺失时 makeTools 视为全层可用，仍返回 17 个工具", () => {
     const stub = {
       profileStore: {},
       personStore: {},
@@ -452,6 +454,6 @@ describe("W3/T05：既有测试桩（无 degraded 字段）行为不回退", () 
       chatIngest: {},
       settings: {},
     } as unknown as KnowselfServices;
-    expect(makeTools(stub)).toHaveLength(16);
+    expect(makeTools(stub)).toHaveLength(17);
   });
 });

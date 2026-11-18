@@ -22,7 +22,31 @@ import type {
 import { createPersonMergesRepo } from "./person-merges";
 import { createPersonWritesRepo } from "./person-writes";
 
-type PersonSqlRow = Omit<PersonRow, "manual_locked"> & { manual_locked: number };
+type PersonSqlRow = Omit<
+  PersonRow,
+  "manual_locked" | "direct_msg_count" | "direct_conv_count" | "direct_first_msg_at" | "direct_last_msg_at"
+> & {
+  manual_locked: number;
+  direct_msg_count: number;
+  direct_conv_count: number;
+  direct_first_ms: number | null;
+  direct_last_ms: number | null;
+};
+
+/** 直聊统计子查询：只统计 `chat_conversations.kind='direct'` 的消息。 */
+const DIRECT_AGG_SQL = `SELECT v.sender_person_id AS pid,
+        COUNT(*) AS direct_msg_count,
+        COUNT(DISTINCT v.conversation_id) AS direct_conv_count,
+        MIN(v.ts_ms) AS direct_first_ms,
+        MAX(v.ts_ms) AS direct_last_ms
+   FROM v_chat_messages v
+   JOIN chat_conversations c ON c.conversation_id = v.conversation_id
+  WHERE c.kind = 'direct' AND v.sender_person_id IS NOT NULL
+  GROUP BY v.sender_person_id`;
+
+function isoOrNull(ms: number | null | undefined): string | null {
+  return ms === null || ms === undefined ? null : new Date(ms).toISOString();
+}
 
 export interface PersonsRepo {
   // ── 读 ──
@@ -79,7 +103,13 @@ export interface PersonsRepo {
 }
 
 function mapPerson(row: PersonSqlRow): PersonRow {
-  return { ...row, manual_locked: row.manual_locked === 1 };
+  const { direct_first_ms, direct_last_ms, ...rest } = row;
+  return {
+    ...rest,
+    manual_locked: row.manual_locked === 1,
+    direct_first_msg_at: isoOrNull(direct_first_ms),
+    direct_last_msg_at: isoOrNull(direct_last_ms),
+  };
 }
 
 function personFilter(q: { subject_kind?: SubjectKind; status?: PersonStatus; keyword?: string }): {
@@ -114,9 +144,17 @@ function pageClause(
 
 export function createPersonsRepo(db: PersonDb): PersonsRepo {
   const get = (personId: string): PersonRow | null => {
-    const row = db.prepare("SELECT * FROM persons WHERE person_id = ?").get(personId) as
-      | PersonSqlRow
-      | undefined;
+    const row = db
+      .prepare(
+        `SELECT p.*,
+                COALESCE(d.direct_msg_count, 0) AS direct_msg_count,
+                COALESCE(d.direct_conv_count, 0) AS direct_conv_count,
+                d.direct_first_ms, d.direct_last_ms
+           FROM persons p
+           LEFT JOIN (${DIRECT_AGG_SQL}) d ON d.pid = p.person_id
+          WHERE p.person_id = ?`,
+      )
+      .get(personId) as PersonSqlRow | undefined;
     return row ? mapPerson(row) : null;
   };
 
@@ -129,9 +167,24 @@ export function createPersonsRepo(db: PersonDb): PersonsRepo {
   const list = (q: PersonListQuery = {}): PersonRow[] => {
     const filter = personFilter(q);
     const page = pageClause(q.limit, q.offset);
+    const directOnly = q.direct_only === true;
+    const baseWhere = filter.where.replace(/^WHERE /, "");
+    const conditions = [baseWhere, ...(directOnly ? ["d.pid IS NOT NULL"] : [])]
+      .filter((item) => item !== "");
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const order = directOnly
+      ? "d.direct_last_ms DESC, p.person_id ASC"
+      : "p.last_msg_at DESC, p.person_id ASC";
     const rows = db
       .prepare(
-        `SELECT * FROM persons ${filter.where} ORDER BY last_msg_at DESC, person_id ASC${page.sql}`,
+        `SELECT p.*,
+                COALESCE(d.direct_msg_count, 0) AS direct_msg_count,
+                COALESCE(d.direct_conv_count, 0) AS direct_conv_count,
+                d.direct_first_ms, d.direct_last_ms
+           FROM persons p
+           LEFT JOIN (${DIRECT_AGG_SQL}) d ON d.pid = p.person_id
+           ${where}
+          ORDER BY ${order}${page.sql}`,
       )
       .all(...filter.params, ...page.params) as PersonSqlRow[];
     return rows.map(mapPerson);

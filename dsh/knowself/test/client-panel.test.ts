@@ -96,11 +96,34 @@ describe("A2 数据端口：createPersonStoreDataPort 确实取 person-store 只
       listPersons: () => [],
       getPerson: () => null,
       events: { timeline: () => [] },
+      messages: { count: () => 0, list: () => [] },
     } as unknown as PersonStore;
     const port = createPersonStoreDataPort(store);
 
     await expect(Promise.resolve(port.getPerson("missing"))).resolves.toBeNull();
     await expect(Promise.resolve(port.timeline("missing"))).resolves.toEqual([]);
+  });
+
+  it("关系事件尚未挖掘时回退为最新原始消息，并明确标记为消息互动", async () => {
+    const messages = [
+      { message_id: "m1", conversation_id: "wechat:alice", sender_name: "宝宝", role: "other", ts_ms: 1, msg_date: "2026-11-15", content: "早上好", content_type: "text" },
+      { message_id: "m2", conversation_id: "wechat:alice", sender_name: "我", role: "me", ts_ms: 2, msg_date: "2026-11-16", content: "午饭吃了吗", content_type: "text" },
+      { message_id: "m3", conversation_id: "wechat:alice", sender_name: "宝宝", role: "other", ts_ms: 3, msg_date: "2026-11-16", content: "吃了", content_type: "text" },
+    ];
+    const list = vi.fn(() => messages.slice(1));
+    const store = {
+      listPersons: () => [],
+      getPerson: () => null,
+      events: { timeline: () => [] },
+      messages: { count: vi.fn(() => 3), list },
+    } as unknown as PersonStore;
+    const port = createPersonStoreDataPort(store);
+
+    await expect(Promise.resolve(port.timeline("alice", { limit: 2 }))).resolves.toEqual([
+      expect.objectContaining({ kind: "message", message_id: "m3", content: "吃了" }),
+      expect.objectContaining({ kind: "message", message_id: "m2", content: "午饭吃了吗" }),
+    ]);
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ person_id: "alice", limit: 2, offset: 1 }));
   });
 });
 
@@ -170,11 +193,12 @@ describe("A2 apply(ctx)：main / sidebar.panellist 注册 + selectPanel 接线",
     expect(Array.from(inject)).toEqual(["slots", "layout"]);
   });
 
-  it("注册 6 个 main（keyed）+ 6 个 sidebar.panellist（list），形状符合核实签名", () => {
+  it("注册 7 个 main（keyed）+ 2 个 sidebar.panellist（list）：KnowSelf 入口 + 图谱", () => {
     const { ctx, registered, injected } = makeStubClientContext();
     apply(ctx);
 
-    // 声明门控：main ×6（人物 / 图谱 / 画像 / 日志 / 待整理 / 资料）、sidebar.panellist ×6
+    // 2026-11-18：人物/画像/待整理/日志/资料合并为 KnowSelf 一个入口，main 注册
+    // 保留五个旧 key 作兼容别名（各自落到对应 tab），侧栏只剩 KnowSelf + 图谱。
     expect(injected).toEqual([
       "main",
       "main",
@@ -182,26 +206,24 @@ describe("A2 apply(ctx)：main / sidebar.panellist 注册 + selectPanel 接线",
       "main",
       "main",
       "main",
-      "sidebar.panellist",
-      "sidebar.panellist",
-      "sidebar.panellist",
-      "sidebar.panellist",
+      "main",
       "sidebar.panellist",
       "sidebar.panellist",
     ]);
-    expect(registered).toHaveLength(12);
+    expect(registered).toHaveLength(9);
 
     const mainOptions = registered
       .map((r) => r.options as { name: string; key: string })
       .filter((o) => o.name === "main");
-    expect(mainOptions).toHaveLength(6);
+    expect(mainOptions).toHaveLength(7);
     expect(mainOptions.map((o) => o.key)).toEqual([
+      "knowself-hub",
       "knowself-person",
-      "knowself-graph",
       "knowself-profile",
-      "knowself-journal",
       "knowself-inbox",
+      "knowself-journal",
       "knowself-sources",
+      "knowself-graph",
     ]);
     // keyed main 用 key，不带 id
     expect(mainOptions.every((o) => !("id" in o))).toBe(true);
@@ -209,38 +231,34 @@ describe("A2 apply(ctx)：main / sidebar.panellist 注册 + selectPanel 接线",
     const sidebarOptions = registered
       .map((r) => r.options as Record<string, unknown>)
       .filter((o) => o["name"] === "sidebar.panellist");
-    expect(sidebarOptions).toHaveLength(6);
+    expect(sidebarOptions).toHaveLength(2);
     expect(sidebarOptions.map((o) => o["id"])).toEqual([
-      "knowself-person",
+      "knowself-hub",
       "knowself-graph",
-      "knowself-profile",
-      "knowself-inbox",
-      "knowself-journal",
-      "knowself-sources",
     ]);
-    // M3 波 2：order 0/1/2/4 保持不变，新增待整理=3、资料=5
-    expect(sidebarOptions.map((o) => o["order"])).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(sidebarOptions.map((o) => o["order"])).toEqual([0, 1]);
     // label 必须是 () => string 函数（locale 感知），不是 string
     for (const options of sidebarOptions) {
       expect(typeof options["label"]).toBe("function");
       expect((options["label"] as () => string)()).not.toBe("");
       expect(options["locale"]).toBe("knowself");
     }
+    expect((sidebarOptions[0]?.["label"] as () => string)()).toBe("KnowSelf");
   });
 
   it("侧栏图标点击触发 ctx.layout.selectPanel(对应面板 id)", () => {
     const { ctx, registered, selected } = makeStubClientContext();
     apply(ctx);
 
-    const personIconEntry = registered.find((r) => {
+    const hubIconEntry = registered.find((r) => {
       const o = r.options as { name?: string; id?: string };
-      return o.name === "sidebar.panellist" && o.id === "knowself-person";
+      return o.name === "sidebar.panellist" && o.id === "knowself-hub";
     });
     const graphIconEntry = registered.find((r) => {
       const o = r.options as { name?: string; id?: string };
       return o.name === "sidebar.panellist" && o.id === "knowself-graph";
     });
-    expect(personIconEntry).toBeDefined();
+    expect(hubIconEntry).toBeDefined();
     expect(graphIconEntry).toBeDefined();
 
     // 直接调用闭包函数组件（无 hooks），读取其返回 element 上的 onSelect 并触发。
@@ -249,12 +267,12 @@ describe("A2 apply(ctx)：main / sidebar.panellist 注册 + selectPanel 接线",
       active: boolean;
     }) => { props: { onSelect?: () => void } };
 
-    const personIcon = personIconEntry?.component as IconComponent;
+    const hubIcon = hubIconEntry?.component as IconComponent;
     const graphIcon = graphIconEntry?.component as IconComponent;
-    personIcon({ size: 24, active: false }).props.onSelect?.();
+    hubIcon({ size: 24, active: false }).props.onSelect?.();
     graphIcon({ size: 24, active: true }).props.onSelect?.();
 
-    expect(selected).toEqual(["knowself-person", "knowself-graph"]);
+    expect(selected).toEqual(["knowself-hub", "knowself-graph"]);
   });
 
   it("apply 接受 ctx.knowself.personPanelDataPort 注入而不抛错", () => {
@@ -264,6 +282,6 @@ describe("A2 apply(ctx)：main / sidebar.panellist 注册 + selectPanel 接线",
     };
     injectedCtx.knowself = { personPanelDataPort: UNAVAILABLE_PORT };
     expect(() => apply(injectedCtx)).not.toThrow();
-    expect(registered).toHaveLength(12);
+    expect(registered).toHaveLength(9);
   });
 });

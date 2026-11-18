@@ -64,6 +64,7 @@ function persistentHarness() {
 function desktopHarness() {
   const drafts = new Map<string, any>();
   const attempts = new Map<string, any>();
+  const tasks = new Map<string, any>();
   const persistence: WechatAssistPersistence = {
     createDraft: (draft) => drafts.set(draft.id, { ...draft }),
     listDrafts: () => [...drafts.values()].map((draft) => ({ ...draft })),
@@ -73,6 +74,36 @@ function desktopHarness() {
       .filter((draft) => draft.status === "sent")
       .map((draft) => Date.parse(draft.sent_at)),
     appendAudit: () => {},
+    createReplyTask: (task) => { tasks.set(task.id, { ...task }); },
+    getReplyTask: (id) => tasks.get(id),
+    getActiveReplyTask: (accountScope) => [...tasks.values()].find((task) =>
+      task.account_scope === accountScope && ["starting", "running", "stopping"].includes(task.status)) as never,
+    listReplyTasks: () => [...tasks.values()].map((task) => ({ ...task })) as never,
+    updateReplyTask: (task) => { tasks.set(task.id, { ...task }); },
+    canContinueReplyTask: () => true,
+    revokeReplyTaskHistory: (input) => tasks.get(input.id) as never,
+    pauseStartingReplyTask: ({ id, at, reason }) => {
+      const task = tasks.get(id);
+      if (task === undefined) return false;
+      Object.assign(task, { status: "paused", stop_reason: reason, updated_at: at });
+      return true;
+    },
+    stopReplyTask: (id, at, reason) => {
+      const task = tasks.get(id);
+      if (task === undefined) return undefined as never;
+      Object.assign(task, { status: "stopped", stop_reason: reason ?? task.stop_reason, updated_at: at, stopped_at: at });
+      return task as never;
+    },
+    claimReplyTaskLease: ({ id, owner, lease_until }) => {
+      const task = tasks.get(id);
+      if (task === undefined) return false;
+      // 真实仓储在 claim 时把 status 置为 running（wechat-assist.ts L446-453）。
+      Object.assign(task, { status: "running", lease_owner: owner, lease_until });
+      return true;
+    },
+    progressReplyTask: () => true,
+    createOwnedReplyTurn: () => 1,
+    finishOwnedReplyTurn: () => true,
     getSendAttempt: (draftId) => attempts.get(draftId),
     claimSendAttempt: (input) => {
       const existing = attempts.get(input.draft_id);
@@ -130,11 +161,18 @@ function desktopHarness() {
       visible_name: "alice",
     })),
     listUnreadMessages: vi.fn(async () => []),
+    prepareTarget: vi.fn(async (conversationId: string) => ({
+      account_scope: "default",
+      conversation_id: conversationId,
+      kind: "contact" as const,
+      visible_name: conversationId.split(":").pop() ?? conversationId,
+    })),
     sendMessage,
     lookupSendResult,
     stop: vi.fn(async () => {}),
   };
   let nextId = 0;
+  const replyWorker = vi.fn(async () => {});
   const make = (overrides: Record<string, unknown> = {}) => createWechatAssistAdapter(
     policy({ drafts_only: false, send_enabled: true, ...overrides }),
     {
@@ -142,9 +180,10 @@ function desktopHarness() {
       audit: { append: () => {} },
       persistence,
       createId: () => "desktop-draft-" + (++nextId),
+      replyWorker,
     },
   );
-  return { make, persistence, transport, sendMessage, lookupSendResult };
+  return { make, persistence, transport, sendMessage, lookupSendResult, tasks, replyWorker };
 }
 
 describe("wechat assist adapter", () => {
@@ -195,6 +234,36 @@ describe("wechat assist adapter", () => {
       code: "RATE_LIMITED",
     });
     expect(h.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a reply skip the cooldown but still honours the hourly quota", async () => {
+    const h = harness({ drafts_only: false, send_enabled: true, cooldown_ms: 60_000, max_messages_per_hour: 2 });
+    const first = await h.adapter.createDraft({ contact_id: "alice", body: "回你第一条" });
+    await h.adapter.sendDraft(first.id, { explicit: true, reply: true });
+
+    // 冷却 60s 还没过，但它是在回对方的新消息 → 立刻允许发送。
+    const second = await h.adapter.createDraft({ contact_id: "alice", body: "再回一句" });
+    await expect(h.adapter.sendDraft(second.id, { explicit: true, reply: true })).resolves.toMatchObject({
+      status: "sent",
+    });
+
+    // 每小时上限对秒回同样生效。
+    const third = await h.adapter.createDraft({ contact_id: "alice", body: "第三条" });
+    await expect(h.adapter.sendDraft(third.id, { explicit: true, reply: true })).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+    });
+    expect(h.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("still applies the cooldown to proactive sends", async () => {
+    const h = harness({ drafts_only: false, send_enabled: true, cooldown_ms: 60_000, max_messages_per_hour: 6 });
+    const first = await h.adapter.createDraft({ contact_id: "alice", body: "主动问候" });
+    await h.adapter.sendDraft(first.id, { explicit: true });
+
+    const second = await h.adapter.createDraft({ contact_id: "alice", body: "又主动一句" });
+    await expect(h.adapter.sendDraft(second.id, { explicit: true })).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+    });
   });
 
   it("does not change a draft when the transport fails and audits the failure", async () => {
@@ -412,5 +481,121 @@ describe("wechat assist adapter", () => {
     await expect(h.adapter.stopReplyTask(task.id)).resolves.toMatchObject({ status: "stopped" });
     await expect(h.adapter.stopReplyTask(task.id)).resolves.toMatchObject({ status: "stopped" });
     expect(h.audit.filter((entry) => entry.action === "reply_task_stopped")).toHaveLength(1);
+  });
+});
+
+describe("explicitly started reply task authorizes its own contact", () => {
+  function startBob(adapter: ReturnType<ReturnType<typeof desktopHarness>["make"]>) {
+    return adapter.startReplyTask({
+      conversation_id: "wechat:bob",
+      contact_id: "bob",
+      objective: "问清楚昨晚去哪了",
+      provider_id: "hcnsec",
+      model_id: "DeepSeek-V4.1-Flash",
+      history_authorized: false,
+    });
+  }
+
+  it("runs and sends for a contact that is not in the global allowlist", async () => {
+    const h = desktopHarness();
+    const adapter = h.make({ allowlist: ["alice"] });
+
+    const task = await startBob(adapter);
+
+    expect(task.status).toBe("running");
+    expect(task.stop_reason).toBeNull();
+    expect(h.replyWorker).toHaveBeenCalledTimes(1);
+
+    // 微信当前停在该联系人的会话上（发送前的目标校验）。
+    h.transport.inspectCurrentConversation.mockResolvedValue({
+      account_scope: "default",
+      conversation_id: "bob",
+      kind: "contact" as const,
+      visible_name: "bob",
+    });
+    const draft = await adapter.createDraft({ contact_id: "bob", body: "昨晚去哪了" });
+    await expect(adapter.sendDraft(draft.id, { explicit: true })).resolves.toMatchObject({ status: "sent" });
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("still blocks ad-hoc drafts to a contact nothing was started for", async () => {
+    const h = desktopHarness();
+    const adapter = h.make({ allowlist: ["alice"] });
+    const draft = await adapter.createDraft({ contact_id: "bob", body: "不该发" });
+
+    await expect(adapter.sendDraft(draft.id, { explicit: true })).rejects.toMatchObject({
+      code: "NOT_ALLOWLISTED",
+    });
+    expect(h.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("reclaims the authorization as soon as the task stops", async () => {
+    const h = desktopHarness();
+    const adapter = h.make({ allowlist: ["alice"] });
+    const task = await startBob(adapter);
+    await adapter.stopReplyTask(task.id);
+
+    const draft = await adapter.createDraft({ contact_id: "bob", body: "任务停了" });
+    await expect(adapter.sendDraft(draft.id, { explicit: true })).rejects.toMatchObject({
+      code: "NOT_ALLOWLISTED",
+    });
+  });
+
+  it("still refuses to start when the global send switch is off", async () => {
+    const h = desktopHarness();
+    const adapter = h.make({ allowlist: ["alice"], send_enabled: false });
+
+    const task = await startBob(adapter);
+
+    expect(task.status).toBe("paused");
+    expect(task.stop_reason).toBe("全局发送开关未开启");
+    expect(h.replyWorker).not.toHaveBeenCalled();
+  });
+
+  it("keeps the current-conversation identity when prepareTarget fails", async () => {
+    // 真实事故：所选对象就是微信当前打开的那个会话 → prepareTarget 抛错 → 旧实现把 identity
+    // 抹成 null → 判「当前微信账号或联系人与所选目标不匹配」并暂停任务。
+    const h = desktopHarness();
+    h.transport.inspectCurrentConversation.mockResolvedValue({
+      account_scope: "wxid_me",
+      conversation_id: "wechat:bob",
+      kind: "contact" as const,
+      visible_name: "bob",
+    });
+    h.transport.prepareTarget.mockRejectedValue(new Error("bridge did not report an open conversation"));
+    const adapter = h.make({ allowlist: ["alice"] });
+
+    const task = await startBob(adapter);
+
+    expect(task.status).toBe("running");
+    expect(task.stop_reason).toBeNull();
+    expect(task.account_scope).toBe("wxid_me");
+  });
+
+  it("still refuses to start when the open conversation is somebody else", async () => {
+    const h = desktopHarness();
+    h.transport.inspectCurrentConversation.mockResolvedValue({
+      account_scope: "wxid_me",
+      conversation_id: "wechat:carol",
+      kind: "contact" as const,
+      visible_name: "carol",
+    });
+    h.transport.prepareTarget.mockRejectedValue(new Error("target mismatch"));
+    const adapter = h.make({ allowlist: ["alice"] });
+
+    const task = await startBob(adapter);
+
+    expect(task.status).toBe("paused");
+    expect(task.stop_reason).toBe("当前微信账号或联系人与所选目标不匹配");
+  });
+
+  it("still refuses to start under the drafts-only policy", async () => {
+    const h = desktopHarness();
+    const adapter = h.make({ allowlist: ["alice"], drafts_only: true });
+
+    const task = await startBob(adapter);
+
+    expect(task.status).toBe("paused");
+    expect(task.stop_reason).toBe("当前是「只存草稿」策略");
   });
 });

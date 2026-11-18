@@ -35,7 +35,11 @@ export interface ReplyContextMessage extends ReplySourceMessage {
 
 export interface ReplyRetrievalIndex {
   upsertConversation(input: ReplyConversationSource, now?: string): void;
-  syncConversation(input: ReplyConversationSource, source: ReplyHistorySource, opts?: { batchSize?: number; now?: () => string }): number;
+  syncConversation(
+    input: ReplyConversationSource,
+    source: ReplyHistorySource,
+    opts?: { batchSize?: number; maxMessages?: number; now?: () => string },
+  ): number;
   rebuildConversation(input: ReplyConversationSource, source: ReplyHistorySource, opts?: { batchSize?: number; now?: () => string }): number;
   deleteConversation(conversationId: string): void;
   recent(conversationId: string, limit?: number): ReplyContextMessage[];
@@ -121,13 +125,15 @@ export function createReplyRetrievalIndex(db: ReplyRetrievalDb): ReplyRetrievalI
   function syncConversation(
     input: ReplyConversationSource,
     source: ReplyHistorySource,
-    opts: { batchSize?: number; now?: () => string } = {},
+    opts: { batchSize?: number; maxMessages?: number; now?: () => string } = {},
   ): number {
     const batchSize = Math.max(1, Math.min(opts.batchSize ?? DEFAULT_BATCH, 2000));
+    const maxMessages = Math.max(1, Math.min(opts.maxMessages ?? Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER));
     const now = opts.now ?? nowIso;
     upsertConversation(input, now());
     let cursorValue = checkpoint(input.conversation_id);
     let total = 0;
+    let fetched = 0;
     for (;;) {
       const after = cursorValue.last_ts_ms === null || cursorValue.last_message_id === null
         ? undefined
@@ -135,9 +141,10 @@ export function createReplyRetrievalIndex(db: ReplyRetrievalDb): ReplyRetrievalI
       const page = source.listMessages({
         conversation_id: input.conversation_id,
         ...(after === undefined ? {} : { after }),
-        limit: batchSize,
+        limit: Math.min(batchSize, maxMessages - fetched),
       });
       if (page.rows.length === 0) break;
+      fetched += page.rows.length;
       const last = page.rows[page.rows.length - 1]!;
       db.transaction(() => {
         const indexedAt = now();
@@ -168,7 +175,7 @@ export function createReplyRetrievalIndex(db: ReplyRetrievalDb): ReplyRetrievalI
         db.prepare("UPDATE reply_conversations SET source_highwater_ts_ms = ?, source_highwater_message_id = ?, state = 'ready', updated_at = ? WHERE conversation_id = ?").run(last.ts_ms, last.message_id, indexedAt, input.conversation_id);
       })();
       cursorValue = { last_ts_ms: last.ts_ms, last_message_id: last.message_id };
-      if (page.next_cursor === null) break;
+      if (page.next_cursor === null || fetched >= maxMessages) break;
     }
     return total;
   }
