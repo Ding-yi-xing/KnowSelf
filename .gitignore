@@ -36,6 +36,5 @@ test-results/
 .workbuddy/
 knowself-person-redesign.png
 ui-sources-redesign.png
-docs/dsh-integration/evidence/2026-11-16-correctives/
-docs/dsh-integration/evidence/2026-11-16-correctives-round2/
-docs/dsh-integration/evidence/2026-11-16-wechat-assist-e2e.md
+# 验收证据（含真实聊天/联系人截图与真实数据样本）留在本机
+docs/dsh-integration/evidence/
