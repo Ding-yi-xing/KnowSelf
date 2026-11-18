@@ -36,5 +36,5 @@ test-results/
 .workbuddy/
 knowself-person-redesign.png
 ui-sources-redesign.png
-# 验收证据（含真实聊天/联系人截图与真实数据样本）留在本机
-docs/dsh-integration/evidence/
+# 项目文档与验收证据留在本机，不进公开仓库
+docs/
